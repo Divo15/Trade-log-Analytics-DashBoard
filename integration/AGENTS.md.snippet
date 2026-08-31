@@ -1,0 +1,12 @@
+## Trade-log export contract
+
+Every backtest must run through the project's standard backtest entry point. After the engine finishes successfully, pass its actual completed-trades collection to `trade_log_exporter.export_trade_log()` through the engine adapter.
+
+- Never generate, infer, reconstruct, or manually create trade rows.
+- Never calculate or include P&L, returns, drawdown, or other derived results in the raw trade log.
+- Never change the schema or column order without a schema-version change and updated tests.
+- Stop the run when required execution data is missing or invalid.
+- Treat a run as complete only when the engine completed-trade count equals the exported-row count and `output/trades.csv` validates.
+- Preserve strategy entry, exit, sizing, and execution behavior when changing export code.
+
+Run `trade-log validate output/trades.csv` after backtest integration changes.

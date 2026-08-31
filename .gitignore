@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+dist/
+build/
+
+# Backtest results and sensitive uploads
+output/
+uploads/
+*.duckdb
+*.manifest.json
+
+# Environment secrets
+.env
+.env.*

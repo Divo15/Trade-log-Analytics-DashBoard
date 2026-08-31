@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trade-log-exporter"
+version = "0.1.0"
+description = "Deterministic, engine-independent trade-log CSV export for Python backtests"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "Trade Log Analytics Team" }]
+dependencies = []
+
+[project.scripts]
+trade-log = "trade_log_exporter.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+trade_log_exporter = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
