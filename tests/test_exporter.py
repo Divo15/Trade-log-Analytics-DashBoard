@@ -64,6 +64,28 @@ class ExporterTests(unittest.TestCase):
                     expected_count=1,
                 )
 
+    def test_exports_rows_from_dataframe_like_engine_result(self):
+        class CompletedTradeTable:
+            def __init__(self, rows):
+                self._rows = rows
+                self.columns = tuple(rows[0])
+
+            def __iter__(self):
+                return iter(self.columns)
+
+            def iterrows(self):
+                return iter(enumerate(self._rows))
+
+            def __len__(self):
+                return len(self._rows)
+
+        completed_trades = CompletedTradeTable([valid_trade()])
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "trades.csv"
+            receipt = export_trade_log(completed_trades, output, expected_count=1)
+
+        self.assertEqual(receipt.row_count, 1)
+
     def test_refuses_count_mismatch_before_writing(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "trades.csv"

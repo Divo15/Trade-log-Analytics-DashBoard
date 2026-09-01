@@ -25,15 +25,21 @@ Then:
    successful backtest through the normal entry point.
 4. Export to `output/trades.csv` with expected_count set to the authoritative
    engine completed-trade count.
-5. Use one row per completed trade or closed leg. Connect multi-leg rows with
+5. Ensure the value passed as completed_trades iterates over trade rows. If the
+   authoritative engine result is a pandas DataFrame or another
+   column-iterating table, preserve its count, normalize it to row mappings
+   without changing values, and verify the normalized count before export.
+   Never pass a directly iterated DataFrame as completed trades.
+6. Use one row per completed trade or closed leg. Connect multi-leg rows with
    batch_id and identify the leg with leg_id.
-6. Do not include P&L, return, drawdown, or any derived result field.
-7. Give naive timestamps an explicit timezone from the backtest configuration;
+7. Do not include P&L, return, drawdown, or any derived result field.
+8. Give naive timestamps an explicit timezone from the backtest configuration;
    never guess silently.
-8. Ensure a failed backtest or failed export cannot replace the last valid CSV.
-9. Append the contents of the supplied AGENTS.md or CLAUDE.md snippet to the
+9. Ensure a failed backtest or failed export cannot replace the last valid CSV.
+10. Append the contents of the supplied AGENTS.md or CLAUDE.md snippet to the
    matching project instruction file.
-10. Add tests covering exact columns, row-count matching, field mapping,
+11. Add tests covering exact columns, row-count matching, tabular-result row
+    normalization, field mapping,
     timezone handling, multi-leg behavior when relevant, and failure behavior.
 
 Run one small representative backtest. Then run:

@@ -3,6 +3,7 @@
 Every backtest must run through the project's standard backtest entry point. After the engine finishes successfully, pass its actual completed-trades collection to `trade_log_exporter.export_trade_log()` through the engine adapter.
 
 - Never generate, infer, reconstruct, or manually create trade rows.
+- Ensure the collection passed to the exporter iterates over actual trade rows. If the engine returns a pandas DataFrame or another column-iterating table, preserve its authoritative count, normalize it to row mappings without changing values, and verify the row count. Never pass a directly iterated DataFrame as completed trades.
 - Never calculate or include P&L, returns, drawdown, or other derived results in the raw trade log.
 - Never change the schema or column order without a schema-version change and updated tests.
 - Stop the run when required execution data is missing or invalid.

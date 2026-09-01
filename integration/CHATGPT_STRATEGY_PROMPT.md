@@ -59,6 +59,22 @@ After the supported engine finishes, return:
 Never infer, reconstruct, fabricate, or supplement completed trades. A real
 zero-trade result must return the real empty collection and count zero.
 
+ROW-ORIENTED RETURN REQUIREMENT
+`completed_trades` must iterate over actual trade rows. Never return a pandas
+DataFrame directly, because iterating a DataFrame yields column names. If the
+engine's authoritative completed-trade collection is a DataFrame or another
+column-iterating table:
+
+1. Store its authoritative count before conversion.
+2. Convert it to a row-oriented list without changing values, for example with
+   `to_dict(orient="records")`.
+3. Verify the normalized row count still equals the authoritative engine count.
+4. Return the normalized rows as `completed_trades` and the original count as
+   `completed_trade_count`.
+
+This is only a transport conversion of the engine's authoritative table. It
+does not permit inferred, reconstructed, supplemented, or fabricated trades.
+
 The mapper may emit only these canonical raw-execution fields:
 schema_version, run_id, trade_id, batch_id, leg_id, strategy, symbol, side,
 entry_time, exit_time, quantity, entry_price, exit_price, multiplier, fees.
@@ -98,4 +114,5 @@ Verify that:
 - `run_strategy` contains the requested strategy unchanged;
 - no market data or credentials are embedded in the source;
 - the result uses the engine's real completed-trade collection; and
+- a DataFrame-like completed-trade table is normalized to rows before return;
 - the mapper contains execution facts, not analytics.

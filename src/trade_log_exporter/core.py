@@ -32,6 +32,20 @@ class ExportReceipt:
     schema_version: str = SCHEMA_VERSION
 
 
+def _materialize_completed_trades(completed_trades: Iterable[RawTrade]) -> list[RawTrade]:
+    """Materialize row-oriented engine results without iterating table columns.
+
+    Pandas DataFrames and compatible tabular results expose ``iterrows`` but
+    iterate over column labels by default. Treat their rows as the authoritative
+    completed-trade items so an engine can hand its closed-trade table directly
+    to the exporter without silently mapping column names as trades.
+    """
+    iterrows = getattr(completed_trades, "iterrows", None)
+    if callable(iterrows):
+        return [row for _, row in iterrows()]
+    return list(completed_trades)
+
+
 def _to_record(
     raw: Mapping[str, Any] | TradeRecord,
     *,
@@ -105,7 +119,7 @@ def export_trade_log(
     either a canonical mapping or ``TradeRecord``. If the iterable already contains
     canonical mappings, mapper may be omitted.
     """
-    raw_trades = list(completed_trades)
+    raw_trades = _materialize_completed_trades(completed_trades)
     if expected_count is not None and len(raw_trades) != expected_count:
         raise TradeLogError(
             f"Engine completed-trade count ({expected_count}) does not match "

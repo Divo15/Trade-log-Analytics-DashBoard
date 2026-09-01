@@ -107,6 +107,28 @@ This must be the supported backtesting engine's authoritative collection of
 actual completed trades, closed positions, or closed legs. The script must not
 infer, reconstruct, fabricate, or supplement this collection.
 
+The value handed to the exporter must iterate over trades, not table columns.
+If the engine's authoritative collection is a pandas `DataFrame` or another
+column-iterating table, capture its authoritative count first and normalize it
+to a row-oriented list without changing any values:
+
+```python
+authoritative_completed_trades = engine_result.completed_legs
+authoritative_count = len(authoritative_completed_trades)
+completed_trade_rows = authoritative_completed_trades.to_dict(orient="records")
+
+if len(completed_trade_rows) != authoritative_count:
+    raise ValueError("completed-trade row normalization changed the engine count")
+```
+
+Return `completed_trade_rows` as `completed_trades` and
+`authoritative_count` as `completed_trade_count`. Do not return a pandas
+`DataFrame` directly: normal DataFrame iteration yields column names. This
+row normalization is a transport conversion of the authoritative engine table;
+it is not permission to infer or reconstruct trades. The exporter also handles
+DataFrame-like objects defensively, but generated scripts must still make the
+row boundary explicit.
+
 ### `completed_trade_count`
 
 This must be the authoritative engine count for the same collection. The
@@ -185,6 +207,8 @@ A script is contract-compliant when:
 - it consumes platform-supplied data and configuration;
 - it preserves all requested strategy behavior;
 - it returns the authoritative completed-trade collection and count;
+- any authoritative tabular result is normalized to trade rows, never returned
+  as a directly iterated DataFrame;
 - its mapper contains raw execution fields only;
 - it lets failures propagate; and
 - it does not write or calculate dashboard outputs.
