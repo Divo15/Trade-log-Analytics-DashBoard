@@ -1,44 +1,55 @@
-# Reusable ChatGPT Strategy-Generation Prompt
+# Reusable ChatGPT Colab Strategy-Generation Prompt
 
 Use this prompt when asking ChatGPT to generate a Python trading strategy for
-the future pasted-script runner. Supply the supported engine reference and the
-strategy request; do not ask the model to invent an engine API.
+the standard Google Colab runner. Supply the real engine reference and the
+complete strategy request; never ask the model to invent an engine API.
 
 ## Prompt
 
 ```text
-Generate one complete Python trading-strategy module that complies with
-Strategy Script Contract v1 below.
+Generate one complete Google Colab-compatible Python trading-strategy module
+that complies with Strategy Script Contract v1 below.
 
 STRATEGY REQUEST
-<Describe the complete trading strategy here, including indicators, entries,
+<Describe the complete intended strategy, including indicators, entries,
 exits, sizing, stops, targets, re-entry rules, session rules, and parameters.>
 
 SUPPORTED BACKTESTING ENGINE REFERENCE
-<Paste the real engine API, a known-good example, or the adapter documentation
-here. Do not guess or substitute another engine.>
+<Paste the real engine API, a known-good example, or adapter documentation.
+Do not guess or substitute another engine.>
 
-PLATFORM CONTEXT REFERENCE
-The platform calls run_strategy(context) once. The supplied context contains:
+COLAB CONTEXT REFERENCE
+The standard Colab notebook calls run_strategy(context) once. It supplies:
 - context.run_id: unique string for the run;
-- context.market_data: read-only market data selected by the platform; and
+- context.market_data: read-only market data selected from a Colab upload or
+  Google Drive; and
 - context.config: read-only mapping with instrument, period, execution, and
   parameters sections.
 
 REQUIRED MODULE BOUNDARY
 1. Declare STRATEGY_CONTRACT_VERSION = "1".
-2. Expose exactly one public execution entry point named
+2. Declare RUN_MODE = "single" when the request is one backtest, or
+   RUN_MODE = "sweep" when the request is a parameter sweep, grid search, or
+   optimization. Choose from the user's request, never from runtime results.
+3. Declare SWEEP_PARAMETER_SETS = () for single mode. For sweep mode, declare
+   a non-empty sequence containing one exact parameter mapping per requested
+   iteration. Do not add, remove, or tune parameter values.
+4. Expose exactly one public execution entry point named
    run_strategy(context).
-3. Importing the module must not execute the backtest, access the network, open
-   a hard-coded data path, prompt for input, or write output.
-4. Use context.market_data as the only market-data input. Make a local copy if
+5. Importing the module must not execute the backtest, install packages, mount
+   Google Drive, access the network, open a hard-coded path, prompt for input,
+   or write output.
+6. Use context.market_data as the only market-data input. Make a local copy if
    the engine or indicators need mutation.
-5. Read run settings from context.config. Do not silently override
-   platform-controlled capital, fees, slippage, fill, multiplier, instrument,
-   timeframe, or period settings.
-6. Preserve the requested strategy exactly. The contract must not simplify or
-   change indicators, signals, entries, exits, re-entry, sizing, stops, targets,
-   multi-leg behavior, or strategy state.
+7. Read run settings from context.config. Do not silently override supplied
+   capital, fees, slippage, fill, multiplier, instrument, timeframe, or period.
+8. Preserve the user's intended strategy exactly. Colab compatibility and
+   RUN_MODE selection must not
+   simplify, replace, omit, reinterpret, or tune indicators, signals, entries,
+   exits, re-entry, sizing, stops, targets, multi-leg behavior, or state.
+9. Use only normal Python imports in the module. List any additional
+   Colab-installable packages in source comments; installation belongs in the
+   notebook setup cell.
 
 COMPLETED-TRADE RETURN
 After the supported engine finishes, return:
@@ -48,8 +59,8 @@ After the supported engine finishes, return:
                          closed-position, or closed-leg collection>,
     "completed_trade_count": <the authoritative count for that collection>,
     "trade_mapper": <a callable mapping one actual engine trade and its index
-                     to the canonical raw-execution fields, or None when the
-                     platform's trusted engine adapter applies>,
+                     to canonical raw-execution fields, or None when the
+                     notebook's trusted engine adapter applies>,
     "metadata": {
         "strategy_name": "<descriptive name>",
         "engine": "<the supported engine name>"
@@ -61,58 +72,47 @@ zero-trade result must return the real empty collection and count zero.
 
 ROW-ORIENTED RETURN REQUIREMENT
 `completed_trades` must iterate over actual trade rows. Never return a pandas
-DataFrame directly, because iterating a DataFrame yields column names. If the
-engine's authoritative completed-trade collection is a DataFrame or another
-column-iterating table:
+DataFrame directly. For a DataFrame or another column-iterating table:
 
 1. Store its authoritative count before conversion.
 2. Convert it to a row-oriented list without changing values, for example with
    `to_dict(orient="records")`.
-3. Verify the normalized row count still equals the authoritative engine count.
-4. Return the normalized rows as `completed_trades` and the original count as
-   `completed_trade_count`.
+3. Verify the normalized row count equals the authoritative engine count.
+4. Return those rows and the original authoritative count.
 
-This is only a transport conversion of the engine's authoritative table. It
-does not permit inferred, reconstructed, supplemented, or fabricated trades.
-
-The mapper may emit only these canonical raw-execution fields:
+The mapper may emit only:
 schema_version, run_id, trade_id, batch_id, leg_id, strategy, symbol, side,
 entry_time, exit_time, quantity, entry_price, exit_price, multiplier, fees.
 
-Do not calculate or return P&L, net P&L, gross P&L, returns, equity, drawdown,
-Sharpe, win rate, profit factor, or dashboard data. Trusted platform code
-calculates those independently.
+Do not calculate or return P&L, returns, equity, drawdown, Sharpe, win rate,
+profit factor, or dashboard data. For single runs the website calculates them
+from `trades.csv`; for sweeps the trusted `export_sweep_summary()` package
+calculates them from each iteration's validated canonical trades.
 
 ERROR RULES
-- Let engine, data, configuration, and mapping failures propagate as
-  exceptions.
-- You may add a useful error message and re-raise.
-- Do not catch an exception and return partial trades, an empty result, or a
-  success flag.
-- Do not declare execution status; the platform owns status.
+- Let engine, data, configuration, dependency, and mapping failures propagate.
+- Do not return partial trades, a fake empty result, or a success flag after an
+  error.
+- If the engine reference or Colab-compatible dependency information is
+  insufficient, do not change the strategy or invent an API. Raise
+  NotImplementedError with a precise explanation of what is missing.
 
 OUTPUT FORMAT
-Return only the complete Python source code, without Markdown fences or prose.
-Use comments inside the source to identify any assumption that comes directly
-from the supplied engine reference. If the engine reference is insufficient to
-implement the strategy correctly, do not invent APIs; return Python source that
-raises NotImplementedError with a precise message naming the missing engine
-interface.
+Return only the complete Python module, without Markdown fences or prose.
 ```
 
-## Why this prompt stays flexible
-
-The prompt fixes only the callable boundary, supplied inputs, authoritative
-completed-trade handoff, and error behavior. The strategy request remains free
-to specify any supported trading logic.
-
-## Before pasting generated code into the runner
+## Before using the module in Colab
 
 Verify that:
 
-- the engine API was taken from the supplied reference;
-- `run_strategy` contains the requested strategy unchanged;
-- no market data or credentials are embedded in the source;
-- the result uses the engine's real completed-trade collection; and
-- a DataFrame-like completed-trade table is normalized to rows before return;
+- Strategy Script Contract v1 was applied;
+- RUN_MODE correctly identifies the user-requested run type;
+- SWEEP_PARAMETER_SETS exactly matches the requested sweep, or is empty for a
+  single backtest;
+- every requested strategy rule is preserved;
+- the engine API came from the supplied reference;
+- dependencies are available in the selected Colab runtime;
+- no desktop, Drive, or upload path is embedded in the module;
+- the result uses the engine's authoritative completed trades;
+- tabular trades are normalized to rows; and
 - the mapper contains execution facts, not analytics.

@@ -6,11 +6,17 @@ product
 
 ## Users
 
-An internal trading-strategy team reviewing Python backtests. Users need to upload a deterministic trade log and understand strategy performance without trusting an LLM-generated P&L figure.
+Trading-strategy users who run Python backtests in Google Colab, then upload a
+deterministic trade log for analysis without trusting LLM-generated P&L.
 
 ## Product Purpose
 
-Turn one validated `trades.csv` file into a professional analytics dashboard. The application independently calculates performance from raw executions, rejects incompatible files, and makes every cost assumption explicit. Version one runs locally, requires no account, and analyzes one backtest at a time.
+Turn one validated Colab-generated `trades.csv` file into a professional
+analytics dashboard. The website uploads, revalidates, stores, and independently
+calculates performance from raw executions. It rejects incompatible files,
+makes every cost assumption explicit, and never executes Python strategies or
+backtesting engines. Version one runs locally, requires no account, and analyzes
+one backtest at a time.
 
 ## Brand Personality
 

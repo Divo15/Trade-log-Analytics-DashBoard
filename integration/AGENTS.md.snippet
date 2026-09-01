@@ -1,13 +1,19 @@
 ## Trade-log export contract
 
-Every backtest must run through the project's standard backtest entry point. After the engine finishes successfully, pass its actual completed-trades collection to `trade_log_exporter.export_trade_log()` through the engine adapter.
+Every Colab backtest must run through `run_strategy(context)` using the standard notebook. The notebook supplies market data from a Colab upload or user-selected Google Drive path. After the engine finishes successfully, notebook-owned code passes its actual completed-trades collection to `trade_log_exporter.export_trade_log()` through the engine adapter.
 
+- Every generated strategy module must declare `RUN_MODE = "single"` or `RUN_MODE = "sweep"` from the user's request. Never infer it from runtime results.
+- Declare `SWEEP_PARAMETER_SETS = ()` for single mode. For sweep mode, include one exact mapping per user-requested iteration; never add, remove, or tune values.
 - Never generate, infer, reconstruct, or manually create trade rows.
+- Never change, simplify, replace, omit, reinterpret, or tune the user's intended strategy for Colab compatibility.
+- Never embed a desktop or Google Drive path in the strategy module; consume `context.market_data`.
 - Ensure the collection passed to the exporter iterates over actual trade rows. If the engine returns a pandas DataFrame or another column-iterating table, preserve its authoritative count, normalize it to row mappings without changing values, and verify the row count. Never pass a directly iterated DataFrame as completed trades.
 - Never calculate or include P&L, returns, drawdown, or other derived results in the raw trade log.
 - Never change the schema or column order without a schema-version change and updated tests.
 - Stop the run when required execution data is missing or invalid.
-- Treat a run as complete only when the engine completed-trade count equals the exported-row count and `output/trades.csv` validates.
+- Treat a Colab run as complete only when the engine completed-trade count equals the exported-row count and `output/trades.csv` validates.
 - Preserve strategy entry, exit, sizing, and execution behavior when changing export code.
+- Keep package installation, CSV export, validation, and download in notebook-owned cells, not in the generated strategy module.
+- The analytics website may upload, revalidate, store, and analyze the CSV; it must not execute Python strategies.
 
 Run `trade-log validate output/trades.csv` after backtest integration changes.

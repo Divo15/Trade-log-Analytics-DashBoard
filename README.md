@@ -1,6 +1,8 @@
 # Trade-log Analytics Dashboard
 
-This repository contains the deterministic trade-log exporter and a local web dashboard that independently calculates backtest analytics with DuckDB.
+This repository contains the deterministic trade-log exporter, a standard
+Google Colab backtest runner template, and a web dashboard that independently
+calculates analytics from an uploaded canonical CSV.
 
 ## Run the dashboard
 
@@ -11,7 +13,9 @@ python -m pip install -e .
 trade-dashboard
 ```
 
-The browser opens at `http://127.0.0.1:8765`. Upload a canonical `trades.csv`; the file is processed locally and is not retained after analysis.
+The browser opens at `http://127.0.0.1:8765`. Upload a canonical `trades.csv`;
+the local version processes it temporarily. A hosted version may revalidate and
+store it before analysis, but it never executes the strategy or backtest.
 
 The first dashboard version supports one backtest at a time. It calculates gross and net P&L, drawdown, win rate, profit factor, traded-day Sharpe, streaks, daily equity, monthly performance, and closed-batch results. When `fees` are zero it explicitly states that brokerage and statutory charges are excluded.
 
@@ -35,7 +39,28 @@ For a separate strategy project, install this repository by local path:
 python -m pip install -e "C:\path\to\Trade-log-Analytics-DashBoard"
 ```
 
-## Connect a backtest
+## Run a backtest in Google Colab
+
+Open [`integration/COLAB_BACKTEST_TEMPLATE.ipynb`](integration/COLAB_BACKTEST_TEMPLATE.ipynb)
+in Google Colab. The notebook:
+
+1. installs the pinned exporter and strategy dependencies;
+2. accepts strategy/engine files through a Colab upload;
+3. selects market data from an upload or Google Drive;
+4. creates the context and calls `run_strategy(context)`;
+5. exports and validates `output/trades.csv`; and
+6. downloads the CSV and checksum manifest.
+
+The strategy module never owns CSV export or analytics. The rules preserve the
+user's complete intended trading behavior and standardize only the interface,
+configuration, authoritative completed-trade handoff, and raw trade schema.
+Every generated module declares `RUN_MODE = "single"` or `"sweep"` from the
+user's request so the notebook can select the correct trusted output workflow.
+Single mode creates `trades.csv`. Sweep mode runs the exact declared
+`SWEEP_PARAMETER_SETS` and creates `sweep_results.csv`; see
+[`integration/SWEEP_SUMMARY_CONTRACT.md`](integration/SWEEP_SUMMARY_CONTRACT.md).
+
+## Connect an existing backtest
 
 ```python
 from trade_log_exporter import export_trade_log
@@ -84,7 +109,8 @@ The example in [`examples/custom_engine_integration.py`](examples/custom_engine_
 schema_version,run_id,trade_id,batch_id,leg_id,strategy,symbol,side,entry_time,exit_time,quantity,entry_price,exit_price,multiplier,fees
 ```
 
-There is no P&L column. The future dashboard will calculate P&L independently from direction, quantity, execution prices, multiplier, and fees.
+There is no P&L column. The dashboard calculates P&L independently from
+direction, quantity, execution prices, multiplier, and fees.
 
 ## Validate an exported file
 
@@ -96,6 +122,13 @@ Print the required header:
 
 ```bash
 trade-log schema
+```
+
+Validate or inspect a sweep summary:
+
+```bash
+trade-log validate-sweep output/sweep_results.csv
+trade-log sweep-schema
 ```
 
 ## Connect Codex or Claude Code
@@ -111,18 +144,17 @@ Then copy the relevant durable contract into the strategy repository:
 
 These files preserve the contract for future coding-agent sessions. The executable exporter remains responsible for validation; agent instructions are not a substitute for runtime checks.
 
-## Generate a pasted strategy module
+## Generate a Colab strategy module
 
-The future pasted-script runner uses the strategy-neutral boundary documented in
+The standard Colab notebook uses the strategy-neutral boundary documented in
 [`integration/STRATEGY_SCRIPT_CONTRACT.md`](integration/STRATEGY_SCRIPT_CONTRACT.md).
 Use [`integration/CHATGPT_STRATEGY_PROMPT.md`](integration/CHATGPT_STRATEGY_PROMPT.md)
 to generate a compliant module after supplying the real supported-engine API and
 the requested strategy. The contract standardizes data, configuration,
 completed-trade handoff, and error behavior without prescribing trading logic.
 
-The current implementation still accepts a canonical CSV; see
-[`ARCHITECTURE.md`](ARCHITECTURE.md) for the inspected system boundary and the
-runner components that remain to be built.
+After Colab downloads the validated CSV, upload it to the dashboard. See
+[`ARCHITECTURE.md`](ARCHITECTURE.md) for the complete boundary.
 
 ## Test
 
