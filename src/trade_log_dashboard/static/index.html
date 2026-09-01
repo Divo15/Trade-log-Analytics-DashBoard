@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Independent analytics for deterministic backtest trade logs">
+  <title>Trade-log Analytics</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Trade-log Analytics home">
+      <span class="brand-mark" aria-hidden="true">T</span>
+      <span>Trade-log Analytics</span>
+    </a>
+    <div class="topbar-actions">
+      <span class="local-badge">Local workspace</span>
+      <button class="secondary-button" id="replaceButton" type="button" hidden>Upload another CSV</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="upload-view" id="uploadView" aria-labelledby="uploadTitle">
+      <div class="upload-copy">
+        <p class="context-label">Independent backtest review</p>
+        <h1 id="uploadTitle">Turn executed trades into evidence.</h1>
+        <p>Upload the canonical CSV created by your backtest. The dashboard validates every row, then calculates P&amp;L and risk metrics locally using DuckDB.</p>
+        <ul class="trust-list" aria-label="Processing guarantees">
+          <li><span aria-hidden="true">✓</span> No LLM-generated P&amp;L</li>
+          <li><span aria-hidden="true">✓</span> Your file stays on this device</li>
+          <li><span aria-hidden="true">✓</span> Exact schema validation before analysis</li>
+        </ul>
+      </div>
+
+      <div class="drop-zone" id="dropZone">
+        <input id="fileInput" type="file" accept=".csv,text/csv" hidden>
+        <div class="file-symbol" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="28" height="28"><path d="M7 2.75h6.6L19.25 8v13.25H7z"/><path d="M13.25 3v5.25H19"/><path d="M9.75 12.25h6.5M9.75 15.25h6.5M9.75 18.25h4"/></svg>
+        </div>
+        <h2>Drop your trades.csv here</h2>
+        <p>Canonical schema v1 · CSV up to 25 MB</p>
+        <button class="primary-button" id="chooseButton" type="button">Choose CSV file</button>
+        <div class="upload-status" id="uploadStatus" role="status" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <section class="dashboard" id="dashboard" hidden aria-labelledby="strategyTitle">
+      <div class="report-heading">
+        <div>
+          <div class="report-meta">
+            <span class="status-badge"><span aria-hidden="true">✓</span> Validated</span>
+            <span id="dateRange"></span>
+          </div>
+          <h1 id="strategyTitle">Strategy report</h1>
+          <p id="runMeta"></p>
+        </div>
+        <div class="source-summary">
+          <span id="fileName">trades.csv</span>
+          <span id="checksum"></span>
+        </div>
+      </div>
+
+      <aside class="assumption" id="feeNote">
+        <strong>Cost assumption</strong>
+        <span>Brokerage and statutory charges are not included. Fees are zero.</span>
+      </aside>
+
+      <section class="kpi-strip" aria-label="Primary performance indicators">
+        <article><span>Net P&amp;L</span><strong id="netPnl">—</strong><small>after recorded fees</small></article>
+        <article><span>Gross P&amp;L</span><strong id="grossPnl">—</strong><small>from executed prices</small></article>
+        <article><span>Max drawdown</span><strong id="maxDrawdown">—</strong><small>peak to trough</small></article>
+        <article><span>Win rate</span><strong id="winRate">—</strong><small id="winLossCount">closed batches</small></article>
+        <article><span>Sharpe</span><strong id="sharpe">—</strong><small>traded-day annualised</small></article>
+        <article><span>Profit factor</span><strong id="profitFactor">—</strong><small>gross wins ÷ losses</small></article>
+      </section>
+
+      <div class="analysis-grid">
+        <section class="panel equity-panel" aria-labelledby="equityTitle">
+          <div class="panel-heading">
+            <div><h2 id="equityTitle">Cumulative net P&amp;L</h2><p>Daily realised performance and drawdown</p></div>
+            <strong id="equityTotal">—</strong>
+          </div>
+          <div class="chart-shell" id="equityChart" role="img" aria-label="Cumulative P and L chart"></div>
+        </section>
+
+        <section class="metric-ledger" aria-label="Detailed performance metrics">
+          <div><span>Traded days</span><strong id="tradedDays">—</strong></div>
+          <div><span>Average day</span><strong id="averageDay">—</strong></div>
+          <div><span>Best day</span><strong id="bestDay">—</strong></div>
+          <div><span>Worst day</span><strong id="worstDay">—</strong></div>
+          <div><span>Average batch</span><strong id="averageBatch">—</strong></div>
+          <div><span>Median batch</span><strong id="medianBatch">—</strong></div>
+          <div><span>Win streak</span><strong id="winStreak">—</strong></div>
+          <div><span>Loss streak</span><strong id="lossStreak">—</strong></div>
+        </section>
+      </div>
+
+      <section class="panel diagnostic-panel" aria-labelledby="diagnosticTitle">
+        <div class="panel-heading">
+          <div><h2 id="diagnosticTitle">Consistency and concentration</h2><p>How often the strategy wins, how it loses, and whether a few days dominate the result</p></div>
+        </div>
+        <div class="diagnostic-grid">
+          <div class="diagnostic-group">
+            <h3>Daily consistency</h3>
+            <dl>
+              <div><dt>Winning days</dt><dd id="winDays">—</dd></div>
+              <div><dt>Losing days</dt><dd id="lossDays">—</dd></div>
+              <div><dt>Average green day</dt><dd id="averageWinDay">—</dd></div>
+              <div><dt>Average red day</dt><dd id="averageLossDay">—</dd></div>
+              <div><dt>Day risk : reward</dt><dd id="dayRiskReward">—</dd></div>
+              <div><dt>Median day</dt><dd id="medianDay">—</dd></div>
+              <div><dt>Longest underwater</dt><dd id="underwaterDays">—</dd></div>
+              <div><dt>Expectancy per day</dt><dd id="expectancyDay">—</dd></div>
+            </dl>
+          </div>
+          <div class="diagnostic-group concentration-group">
+            <h3>Where the money came from</h3>
+            <div class="concentration-lead"><strong id="bestDayShare">—</strong><span>of gross winning-day P&amp;L came from the best day</span></div>
+            <dl>
+              <div><dt>Gross winning days</dt><dd id="grossWinningDays">—</dd></div>
+              <div><dt>Top three days</dt><dd id="topThreeShare">—</dd></div>
+              <div><dt>Net without best day</dt><dd id="netWithoutBest">—</dd></div>
+              <div><dt>Net without best and worst</dt><dd id="netWithoutBestWorst">—</dd></div>
+            </dl>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel monthly-panel" aria-labelledby="monthlyTitle">
+        <div class="panel-heading">
+          <div><h2 id="monthlyTitle">Monthly performance</h2><p>Net P&amp;L grouped by exit month</p></div>
+        </div>
+        <div class="chart-shell monthly-chart" id="monthlyChart" role="img" aria-label="Monthly P and L bar chart"></div>
+        <div class="table-scroll monthly-table-scroll">
+          <table>
+            <thead><tr><th>Month</th><th class="numeric">High</th><th class="numeric">Close</th><th class="numeric">Best day</th><th class="numeric">Worst day</th><th class="numeric">Max drawdown</th><th class="numeric">Days</th></tr></thead>
+            <tbody id="monthlyRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel table-panel" aria-labelledby="tradesTitle">
+        <div class="panel-heading">
+          <div><h2 id="tradesTitle">Closed batches</h2><p>Most recent 100, calculated from raw legs</p></div>
+          <span class="count-badge" id="batchCount">—</span>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>Batch</th><th>Exit</th><th class="numeric">Legs</th><th class="numeric">Gross P&amp;L</th><th class="numeric">Fees</th><th class="numeric">Net P&amp;L</th></tr></thead>
+            <tbody id="tradeRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="data-gap" aria-labelledby="dataGapTitle">
+        <div><h2 id="dataGapTitle">Metrics that need more than a trade log</h2><p>These are intentionally not estimated or invented.</p></div>
+        <ul>
+          <li><strong>Return on employed and Calmar</strong><span>Need capital or peak margin.</span></li>
+          <li><strong>NIFTY comparison</strong><span>Needs benchmark price history for the same dates.</span></li>
+          <li><strong>Strategy configuration</strong><span>Entry rules, stops, targets and expiry are not stored in schema v1.</span></li>
+        </ul>
+      </section>
+    </section>
+  </main>
+
+  <footer>Analytics are calculated from uploaded executions and are not financial advice.</footer>
+  <script src="/app.js" defer></script>
+</body>
+</html>

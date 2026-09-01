@@ -3,6 +3,7 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 .venv/
+.tmp/
 dist/
 build/
 
@@ -11,6 +12,9 @@ output/
 uploads/
 *.duckdb
 *.manifest.json
+dashboard-preview.png
+dashboard-mobile-preview.png
+dashboard-expanded-preview.png
 
 # Environment secrets
 .env

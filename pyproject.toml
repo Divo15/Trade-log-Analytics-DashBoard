@@ -10,10 +10,13 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Proprietary" }
 authors = [{ name = "Trade Log Analytics Team" }]
-dependencies = []
+dependencies = [
+    "duckdb>=1.1,<2",
+]
 
 [project.scripts]
 trade-log = "trade_log_exporter.cli:main"
+trade-dashboard = "trade_log_dashboard.server:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -23,6 +26,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 trade_log_exporter = ["py.typed"]
+trade_log_dashboard = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

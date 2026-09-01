@@ -1,6 +1,19 @@
 # Trade-log Analytics Dashboard
 
-This repository currently contains the backtest-side integration package for producing deterministic, versioned trade-log CSV files. The web dashboard is intentionally deferred until the export contract is installed and verified.
+This repository contains the deterministic trade-log exporter and a local web dashboard that independently calculates backtest analytics with DuckDB.
+
+## Run the dashboard
+
+Install the repository, then start the local application:
+
+```bash
+python -m pip install -e .
+trade-dashboard
+```
+
+The browser opens at `http://127.0.0.1:8765`. Upload a canonical `trades.csv`; the file is processed locally and is not retained after analysis.
+
+The first dashboard version supports one backtest at a time. It calculates gross and net P&L, drawdown, win rate, profit factor, traded-day Sharpe, streaks, daily equity, monthly performance, and closed-batch results. When `fees` are zero it explicitly states that brokerage and statutory charges are excluded.
 
 ## What the package does
 
@@ -97,6 +110,19 @@ Then copy the relevant durable contract into the strategy repository:
 - `integration/CLAUDE.md.snippet` → append to that project's `CLAUDE.md`
 
 These files preserve the contract for future coding-agent sessions. The executable exporter remains responsible for validation; agent instructions are not a substitute for runtime checks.
+
+## Generate a pasted strategy module
+
+The future pasted-script runner uses the strategy-neutral boundary documented in
+[`integration/STRATEGY_SCRIPT_CONTRACT.md`](integration/STRATEGY_SCRIPT_CONTRACT.md).
+Use [`integration/CHATGPT_STRATEGY_PROMPT.md`](integration/CHATGPT_STRATEGY_PROMPT.md)
+to generate a compliant module after supplying the real supported-engine API and
+the requested strategy. The contract standardizes data, configuration,
+completed-trade handoff, and error behavior without prescribing trading logic.
+
+The current implementation still accepts a canonical CSV; see
+[`ARCHITECTURE.md`](ARCHITECTURE.md) for the inspected system boundary and the
+runner components that remain to be built.
 
 ## Test
 
