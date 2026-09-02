@@ -1,4 +1,4 @@
-# Strategy Script Contract v1
+# Strategy Script Contract v2
 
 ## Purpose
 
@@ -29,9 +29,10 @@ These decisions belong exclusively to the submitted strategy.
 Every submitted module must expose exactly one public execution entry point:
 
 ```python
-STRATEGY_CONTRACT_VERSION = "1"
+STRATEGY_CONTRACT_VERSION = "2"
 RUN_MODE = "single"  # or "sweep"
 SWEEP_PARAMETER_SETS = ()  # Non-empty sequence of mappings when RUN_MODE == "sweep"
+DEFAULT_MARKET_DATA_PATH = None  # Or an exact user-supplied Colab Drive path
 
 
 def run_strategy(context):
@@ -51,8 +52,22 @@ mapping requested by the user. The notebook calls `run_strategy(context)` once
 per item after placing that mapping in `context.config["parameters"]`. For
 `RUN_MODE = "single"`, declare `SWEEP_PARAMETER_SETS = ()`.
 
-The standard Colab notebook calls `run_strategy(context)` once per execution. Importing the
-module must not start a backtest, contact a service, or write output.
+`DEFAULT_MARKET_DATA_PATH` is optional configuration for the trusted notebook.
+It may be set only when the user explicitly supplies the exact Colab Google
+Drive path. The generator must preserve that string exactly: it must not
+invent, infer, normalize, relocate, or silently change it. Otherwise, declare
+`DEFAULT_MARKET_DATA_PATH = None`.
+
+An embedded default is valid only when it is a Colab-mounted Google Drive path,
+such as `/content/drive/MyDrive/...` (or a shared-drive path under
+`/content/drive/Shareddrives/...`). Windows paths, macOS or Linux desktop
+paths, and arbitrary server paths are forbidden. This declaration does not
+authorize the module to open or inspect the path.
+
+The standard Colab notebook calls `run_strategy(context)` once per execution.
+Importing the module must not start a backtest, mount Drive, inspect the
+filesystem, load market data, contact a service, prompt for input, or write
+output.
 
 Helper functions, classes, indicators, and strategy-specific data structures
 are unrestricted and may be defined in the same module.
@@ -67,14 +82,25 @@ The standard Colab notebook supplies one context object with these logical field
 | `market_data` | User/notebook | Read-only market data selected from a Colab upload or Google Drive |
 | `config` | User/notebook | Read-only run and strategy configuration |
 
-The concrete context type is provided by the reusable notebook. The notebook
-may obtain data from a Colab upload or a user-selected Google Drive path, then
-passes that selection through `context.market_data`. The strategy must consume
-that supplied value instead of mounting Drive, opening an embedded desktop or
-Drive path, prompting for a file, or downloading market data. If a framework
-needs to mutate a dataframe, the script must make a strategy-local copy first.
+The concrete context type is provided by the reusable notebook. For Drive
+data, the notebook imports the strategy without filesystem side effects and
+then selects the exact path in this order:
 
-The notebook may add fields in a backward-compatible way. A v1 strategy must
+1. a non-empty explicit notebook `MARKET_DATA_PATH` override;
+2. `strategy.DEFAULT_MARKET_DATA_PATH`; or
+3. a clear failure when neither is present.
+
+The notebook validates that a declared default is a permitted Colab Drive
+path, mounts Drive, verifies the selected path exists, and passes the resolved
+`Path` through `context.market_data`. For uploaded data, the notebook uses the
+uploaded file or extracted archive and does not mount Drive.
+
+The strategy must consume market data only through `context.market_data`. It
+must not mount Drive, open its declared default directly, prompt for a file, or
+download market data. If a framework needs to mutate a dataframe, the script
+must make a strategy-local copy first.
+
+The notebook may add fields in a backward-compatible way. A v2 strategy must
 not depend on undocumented context attributes.
 
 ## Strategy-preservation invariant
@@ -230,15 +256,19 @@ change indicators, entries, exits, sizing, risk rules, or other strategy logic.
 
 A script is contract-compliant when:
 
-- it declares `STRATEGY_CONTRACT_VERSION = "1"`;
+- it declares `STRATEGY_CONTRACT_VERSION = "2"`;
 - it declares `RUN_MODE` as exactly `"single"` or `"sweep"` based on the
   user's request;
 - it declares an empty `SWEEP_PARAMETER_SETS` for `single` or the exact,
   non-empty requested parameter mappings for `sweep`;
-- importing it has no execution side effects;
+- it declares `DEFAULT_MARKET_DATA_PATH = None` unless the user supplied an
+  exact permitted Colab Drive path;
+- it preserves an explicitly supplied default path exactly and embeds no
+  desktop or arbitrary server market-data path;
+- importing it has no execution, Drive, filesystem, network, input, or
+  market-data-loading side effects;
 - it exposes callable `run_strategy(context)`;
 - it consumes notebook-supplied data and configuration;
-- it embeds no desktop or Google Drive market-data path;
 - it preserves all requested strategy behavior;
 - it returns the authoritative completed-trade collection and count;
 - any authoritative tabular result is normalized to trade rows, never returned

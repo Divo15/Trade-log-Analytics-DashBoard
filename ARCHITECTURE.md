@@ -8,7 +8,7 @@ runtime. The analytics website never executes uploaded Python.
 ```text
 Google Colab
     -> notebook-selected upload or Google Drive market data
-    -> Strategy Contract v1 module: run_strategy(context)
+    -> Strategy Contract v2 module: run_strategy(context)
     -> supported backtesting engine
     -> authoritative completed trades
     -> trade_log_exporter.export_trade_log()
@@ -46,7 +46,8 @@ The reusable notebook owns:
 
 - package installation in setup cells;
 - optional Google Drive mounting and file uploads;
-- explicit market-data selection;
+- explicit market-data selection, with a notebook Drive-path override taking
+  precedence over an explicitly user-supplied strategy default;
 - creation of `run_id`, `market_data`, and immutable configuration;
 - one call to `run_strategy(context)`;
 - authoritative completed-trade count verification;
@@ -54,9 +55,11 @@ The reusable notebook owns:
 - checksum manifest creation; and
 - download of the CSV and manifest.
 
-The strategy module owns only strategy behavior and the engine call. It must
-not mount Drive, install packages, embed paths, write output, or calculate
-dashboard analytics.
+The strategy module owns only strategy behavior and the engine call. It may
+passively declare an exact user-supplied Colab Drive path for notebook use, but
+must not mount Drive, inspect that path, load data during import, install
+packages, write output, or calculate dashboard analytics. Runtime market data
+is consumed only through `context.market_data`.
 
 ## Website responsibilities
 

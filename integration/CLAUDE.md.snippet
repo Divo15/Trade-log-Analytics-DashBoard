@@ -4,9 +4,12 @@ Every Colab backtest must run through `run_strategy(context)` using the standard
 
 - Every generated strategy module must declare `RUN_MODE = "single"` or `RUN_MODE = "sweep"` from the user's request. Never infer it from runtime results.
 - Declare `SWEEP_PARAMETER_SETS = ()` for single mode. For sweep mode, include one exact mapping per user-requested iteration; never add, remove, or tune values.
+- Declare `STRATEGY_CONTRACT_VERSION = "2"` and `DEFAULT_MARKET_DATA_PATH = None` unless the user explicitly supplied an exact Colab Drive path.
+- Preserve an explicitly supplied `/content/drive/MyDrive/...` or `/content/drive/Shareddrives/...` path exactly. Never invent or embed desktop or arbitrary server paths.
 - Never generate, infer, reconstruct, or manually create trade rows.
 - Never change, simplify, replace, omit, reinterpret, or tune the user's intended strategy for Colab compatibility.
-- Never embed a desktop or Google Drive path in the strategy module; consume `context.market_data`.
+- Treat `DEFAULT_MARKET_DATA_PATH` as a passive notebook declaration. Importing the strategy must not mount Drive, inspect the filesystem, load data, access the network, or prompt for input.
+- Consume market data only through `context.market_data`; never open or load the declared default in strategy code.
 - Ensure the collection passed to the exporter iterates over actual trade rows. If the engine returns a pandas DataFrame or another column-iterating table, preserve its authoritative count, normalize it to row mappings without changing values, and verify the row count. Never pass a directly iterated DataFrame as completed trades.
 - Never calculate or include P&L, returns, drawdown, or other derived results in the raw trade log.
 - Never change the schema or column order without a schema-version change and updated tests.

@@ -46,7 +46,9 @@ in Google Colab. The notebook:
 
 1. installs the pinned exporter and strategy dependencies;
 2. accepts strategy/engine files through a Colab upload;
-3. selects market data from an upload or Google Drive;
+3. imports a Strategy Contract v2 module and selects market data from an
+   upload, an explicit notebook Drive-path override, or the module's explicitly
+   user-supplied `DEFAULT_MARKET_DATA_PATH`;
 4. creates the context and calls `run_strategy(context)`;
 5. exports and validates `output/trades.csv`; and
 6. downloads the CSV and checksum manifest.
@@ -56,6 +58,9 @@ user's complete intended trading behavior and standardize only the interface,
 configuration, authoritative completed-trade handoff, and raw trade schema.
 Every generated module declares `RUN_MODE = "single"` or `"sweep"` from the
 user's request so the notebook can select the correct trusted output workflow.
+It also declares `DEFAULT_MARKET_DATA_PATH = None` unless the user supplied an
+exact Colab Drive path. The notebook override takes precedence, and the module
+still consumes data only through `context.market_data`.
 Single mode creates `trades.csv`. Sweep mode runs the exact declared
 `SWEEP_PARAMETER_SETS` and creates `sweep_results.csv`; see
 [`integration/SWEEP_SUMMARY_CONTRACT.md`](integration/SWEEP_SUMMARY_CONTRACT.md).

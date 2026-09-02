@@ -8,7 +8,7 @@ complete strategy request; never ask the model to invent an engine API.
 
 ```text
 Generate one complete Google Colab-compatible Python trading-strategy module
-that complies with Strategy Script Contract v1 below.
+that complies with Strategy Script Contract v2 below.
 
 STRATEGY REQUEST
 <Describe the complete intended strategy, including indicators, entries,
@@ -27,27 +27,34 @@ The standard Colab notebook calls run_strategy(context) once. It supplies:
   parameters sections.
 
 REQUIRED MODULE BOUNDARY
-1. Declare STRATEGY_CONTRACT_VERSION = "1".
+1. Declare STRATEGY_CONTRACT_VERSION = "2".
 2. Declare RUN_MODE = "single" when the request is one backtest, or
    RUN_MODE = "sweep" when the request is a parameter sweep, grid search, or
    optimization. Choose from the user's request, never from runtime results.
 3. Declare SWEEP_PARAMETER_SETS = () for single mode. For sweep mode, declare
    a non-empty sequence containing one exact parameter mapping per requested
    iteration. Do not add, remove, or tune parameter values.
-4. Expose exactly one public execution entry point named
+4. Declare DEFAULT_MARKET_DATA_PATH = None unless the user explicitly supplied
+   an exact Colab Google Drive path. If supplied, reproduce that string exactly
+   without inventing, inferring, normalizing, relocating, or changing it. Only
+   `/content/drive/MyDrive/...` and `/content/drive/Shareddrives/...` paths are
+   permitted; reject Windows, macOS/Linux desktop, and arbitrary server paths.
+5. Expose exactly one public execution entry point named
    run_strategy(context).
-5. Importing the module must not execute the backtest, install packages, mount
-   Google Drive, access the network, open a hard-coded path, prompt for input,
-   or write output.
-6. Use context.market_data as the only market-data input. Make a local copy if
+6. Importing the module must not execute the backtest, install packages, mount
+   Google Drive, inspect or access the filesystem, load market data, access the
+   network, prompt for input, or write output.
+7. DEFAULT_MARKET_DATA_PATH is a passive declaration for the trusted notebook;
+   never open, validate, or otherwise consume it inside the strategy module.
+8. Use context.market_data as the only market-data input. Make a local copy if
    the engine or indicators need mutation.
-7. Read run settings from context.config. Do not silently override supplied
+9. Read run settings from context.config. Do not silently override supplied
    capital, fees, slippage, fill, multiplier, instrument, timeframe, or period.
-8. Preserve the user's intended strategy exactly. Colab compatibility and
+10. Preserve the user's intended strategy exactly. Colab compatibility and
    RUN_MODE selection must not
    simplify, replace, omit, reinterpret, or tune indicators, signals, entries,
    exits, re-entry, sizing, stops, targets, multi-leg behavior, or state.
-9. Use only normal Python imports in the module. List any additional
+11. Use only normal Python imports in the module. List any additional
    Colab-installable packages in source comments; installation belongs in the
    notebook setup cell.
 
@@ -105,14 +112,16 @@ Return only the complete Python module, without Markdown fences or prose.
 
 Verify that:
 
-- Strategy Script Contract v1 was applied;
+- Strategy Script Contract v2 was applied;
 - RUN_MODE correctly identifies the user-requested run type;
 - SWEEP_PARAMETER_SETS exactly matches the requested sweep, or is empty for a
   single backtest;
+- DEFAULT_MARKET_DATA_PATH is None unless the user explicitly supplied the
+  exact permitted Colab Drive path;
 - every requested strategy rule is preserved;
 - the engine API came from the supplied reference;
 - dependencies are available in the selected Colab runtime;
-- no desktop, Drive, or upload path is embedded in the module;
+- no desktop, arbitrary server, or invented path is embedded in the module;
 - the result uses the engine's authoritative completed trades;
 - tabular trades are normalized to rows; and
 - the mapper contains execution facts, not analytics.

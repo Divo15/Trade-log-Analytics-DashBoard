@@ -24,14 +24,16 @@ First inspect the repository and report:
 Then:
 1. Install `trade-log-exporter` from
    `<EXPORTER_REPOSITORY_PATH_OR_URL>` and pin the dependency.
-2. Keep or create a Strategy Contract v1 module exposing
+2. Keep or create a Strategy Contract v2 module exposing
    `run_strategy(context)`. Require `RUN_MODE = "single"` or `"sweep"` based
    on the user's requested run type, plus an exact non-empty
    `SWEEP_PARAMETER_SETS` for sweep mode or an empty tuple for single mode. Do
    not add execution side effects at import time.
 3. Consume market data only from `context.market_data`. The standard notebook
-   will set it from a Colab upload or user-selected Google Drive path. Never
-   embed a desktop or Drive path in the strategy module.
+   will set it from a Colab upload or user-selected Google Drive path. Declare
+   `DEFAULT_MARKET_DATA_PATH = None` unless the user explicitly supplies an
+   exact Colab Drive path. Preserve an explicitly supplied path unchanged and
+   consume market data only through `context.market_data`.
 4. Consume instrument, period, execution assumptions, and strategy parameters
    from `context.config`. Never silently override supplied execution values.
 5. Return the engine's authoritative completed-trade collection, its original
