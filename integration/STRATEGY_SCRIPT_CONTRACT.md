@@ -60,8 +60,9 @@ folder is removed. A winner rerun receives a fresh cache. No cache is shared
 between separate jobs. The worker prints hit/miss counts in the run log.
 
 Generated standalone scripts can opt in using `getattr` as above and fall back
-to ordinary loading outside the local runner. No supporting Python upload is
-needed. This interface changes execution plumbing, never strategy rules.
+to ordinary loading outside the local runner. Every dashboard strategy must be
+self-contained in its uploaded Python file. This interface changes execution
+plumbing, never strategy rules.
 
 Every submitted module must expose exactly one public execution entry point:
 
@@ -82,6 +83,11 @@ when the user requests one backtest and `"sweep"` when the user requests a
 parameter sweep, grid search, or optimization. The value describes the user's
 requested run type; it must not be inferred from completed trades at runtime.
 Selecting a mode must never alter the intended trading rules.
+
+For the local Trade-log Analytics Dashboard, generated strategy modules must
+read market data only through `context.market_data`. A strategy must never
+embed a developer's local dataset path, infer another dataset folder, download
+market data, or read an environment-specific path.
 
 For `RUN_MODE = "sweep"`, the generated module must also declare a non-empty
 `SWEEP_PARAMETER_SETS` sequence. Each item is one exact strategy-parameter

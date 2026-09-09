@@ -270,6 +270,14 @@ completed-trade handoff, and error behavior without prescribing trading logic.
 After Colab downloads the validated CSV, upload it to the dashboard. See
 [`ARCHITECTURE.md`](ARCHITECTURE.md) for the complete boundary.
 
+## Generate a local dashboard strategy
+
+For a strategy that will run in this dashboard, use
+[`integration/DASHBOARD_STRATEGY_GENERATION_PROMPT.md`](integration/DASHBOARD_STRATEGY_GENERATION_PROMPT.md).
+It requires a self-contained `run_strategy(context)` module, explicit
+`RUN_MODE`, declared sweep parameter mappings when needed, and market data read
+only from `context.market_data`.
+
 ## Test
 
 See [current limitations and improvement backlog](LIMITATIONS.md) for reporting,
