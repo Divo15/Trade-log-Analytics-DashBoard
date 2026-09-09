@@ -1,68 +1,73 @@
 # Trade-log Analytics Dashboard
 
-Run trusted Python backtests locally from a web UI, then independently calculate
-analytics from their exported executions. The repository also supports importing
-existing canonical CSVs and retains an optional legacy Colab notebook.
+Run trusted Python backtests locally in a browser, then calculate analytics from
+their exported executions. The browser interface, strategies, Python environment,
+datasets, and backtest execution all run on the teammate's own computer.
 
-## Run the dashboard
+## Team quick start
 
-On each team computer, run the one-time environment setup from the project
-folder:
+This repository is private. Each teammate must first be invited to it on GitHub,
+then clone it through Codex or Git.
+
+The market dataset is deliberately excluded from Git. Give each teammate a copy
+of the dataset folder through your approved shared drive, external disk, or other
+team file-sharing method. Keep its contents unchanged.
+
+In Codex, a teammate can use this prompt after cloning the repository:
+
+> Read README.md, run the one-time Python environment setup, configure the local
+> dataset folder at `PATH_TO_DATASET`, and run the dashboard locally.
+
+Codex can complete the setup and start the local server. The teammate still needs
+access to the private repository and a local dataset copy.
+
+For manual setup on Windows, install Python 3.11, 3.12, or 3.13, then run from
+the project folder:
 
 ```bat
 setup_environment.cmd
-```
-
-This creates `.venv` and installs the dashboard and shared strategy stack:
-pandas, NumPy, DuckDB, PyArrow, Matplotlib, SciPy, scikit-learn, Seaborn,
-Plotly, Statsmodels and OpenPyXL. Python 3.11, 3.12 or 3.13 must already be installed
-on the computer. Packages installed elsewhere on the computer are ignored.
-
-Open the browser dashboard with:
-
-```bat
 start_dashboard.cmd
 ```
 
-The launcher uses `.venv` and opens the dashboard in your browser.
-Keep the server terminal open while using it; press Ctrl+C there to stop it.
-Uploaded strategies run using the same Python environment.
+`setup_environment.cmd` creates the project `.venv` and installs the dashboard
+and shared strategy stack: pandas, NumPy, DuckDB, PyArrow, Matplotlib, SciPy,
+scikit-learn, Seaborn, Plotly, Statsmodels, and OpenPyXL. It needs internet only
+on the first run. `start_dashboard.cmd` opens the dashboard at
+`http://127.0.0.1:8790/`. Keep the server terminal open while using the app;
+press Ctrl+C there to stop it.
 
-Each teammate can enter the dataset parent folder path in **Storage** in the
-app. Startup reads a small coverage index from the user's application-data cache
-instead of rescanning Parquet data. A dataset is recalculated automatically when
-its summary or chain files are added, removed, resized, or modified.
+## Configure market data
 
-On Windows, writable application data lives under
-`%LOCALAPPDATA%\TradeLogAnalytics`: settings in `settings\settings.json`, rotating
-logs in `logs\application.log`, cached metadata in `cache`, and saved best results
-in `results`. These paths contain no hard-coded username and are preserved when
-application files are replaced. Existing project `history` is copied into the
-user results folder once without overwriting an existing result.
+In the dashboard, open **Storage** and enter the full path to the parent dataset
+folder. It must contain these folders:
 
-The equivalent manual development commands are:
-
-```bash
-python -m venv .venv
-.venv\Scripts\python -m pip install -e ".[strategy]"
-.venv\Scripts\python -m trade_log_dashboard.server
+```text
+PATH_TO_DATASET/
+  nifty current week/
+  next week/
+  next2week/
+  nifty monthly/
 ```
 
-For browser-based development, `start_dashboard.cmd -NoBrowser` starts only the
-local server and prints its assigned address. A specific development port can be
-requested with `start_dashboard.cmd -NoBrowser -Port 8790`.
+The setting is saved per Windows user. The dataset dropdown then shows the
+available expiry datasets. The app uses a persistent coverage cache and refreshes
+only datasets whose files have changed.
 
-1. Select your strategy `.py`. Add sibling modules under the optional supporting-files section only if needed. The strategy upload is automatically the entry point.
-2. Choose **Weekly**, **Next weekly**, or **Monthly** from the configured datasets.
-3. These map respectively to `nifty current week`, `next week`, and
-   `nifty monthly` beneath the configured parent folder. The chosen folder is passed directly as
-   `context.market_data`; it is not substituted with another expiry dataset.
-4. Review the detected available period and optional strategy parameters. The
-   strategy owns its lot size and capital model. The included NIFTY strategy
-   defaults to lot size 65 and ₹300,000 capital per trade. The runner uses the full date range where both
-   summary and option-chain data exist for the selected dataset.
-5. Click **Run backtest**. Follow logs, cancel if needed, and view results
-   automatically when the run finishes. Download the trade CSV and manifest.
+Settings, logs, cache, and saved best results are stored under
+`%LOCALAPPDATA%\TradeLogAnalytics`; market data remains in the folder selected
+above.
+
+## Run a backtest
+
+1. Choose a strategy `.py` file.
+2. Select **Weekly**, **Next Weekly**, or **Monthly**.
+3. Review the available period and optional configuration.
+4. Click **Run backtest**.
+
+The selected data folder is passed directly to the strategy as
+`context.market_data`. The strategy owns its lot size, capital model, and trading
+rules. When a run finishes, the app shows its results and offers the trade CSV
+and checksum manifest for download.
 
 The runner calls `run_strategy(context)`, not the script's Colab `main()`.
 Contract versions 1 and 2 are accepted with `RUN_MODE = "single"`. Return
