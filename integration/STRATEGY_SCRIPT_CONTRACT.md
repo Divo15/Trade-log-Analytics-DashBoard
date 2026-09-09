@@ -2,6 +2,10 @@
 
 ## Purpose
 
+Optional engine-recorded equity snapshots are supported for intraday risk;
+see [Equity snapshot contract](EQUITY_SNAPSHOT_CONTRACT.md). Existing modules
+without snapshots remain compatible.
+
 This contract standardizes the boundary around a generated Python trading
 strategy. It does not standardize or constrain the trading strategy itself.
 
@@ -25,6 +29,39 @@ The contract must not prescribe or alter:
 These decisions belong exclusively to the submitted strategy.
 
 ## Stable module interface
+
+### Optional local runtime market-data loader
+
+The local worker provides `context.market_data_loader`. One loader is shared
+across the sequential combinations of a sweep. It caches data and deterministic
+preparation only; trading decisions, positions, fills, and equity remain the
+strategy's responsibility. Existing strategies need not use it.
+
+```python
+loader = getattr(context, "market_data_loader", None)
+read = lambda: pandas.read_parquet(summary_path)
+summary = (loader.read_frame([summary_path], ("summary-v1",), read)
+           if loader is not None else read())
+```
+
+`read_frame(paths, key, load)` caches a DataFrame from `load()`. List every
+source file in `paths`; the runtime keys by absolute path, size and modification
+time. Put the operation version, date filters and all other inputs in `key`.
+`prepare_frame(key, frames, prepare)` caches deterministic DataFrame preparation;
+the runtime fingerprints the complete input frames, including indexes, and
+returns independent copies. Include every other preparation parameter in `key`.
+Do not cache callbacks with side effects or simulation state. Use simple scalar
+market-data columns; Python objects nested inside cells are outside this API.
+
+The worker bounds prepared frames to 128 MiB and disk frames to 2 GiB, evicting
+older entries when needed. Normal completion and exceptions clean up the cache;
+forced termination can leave cache files in the temporary job folder until that
+folder is removed. A winner rerun receives a fresh cache. No cache is shared
+between separate jobs. The worker prints hit/miss counts in the run log.
+
+Generated standalone scripts can opt in using `getattr` as above and fall back
+to ordinary loading outside the local runner. No supporting Python upload is
+needed. This interface changes execution plumbing, never strategy rules.
 
 Every submitted module must expose exactly one public execution entry point:
 

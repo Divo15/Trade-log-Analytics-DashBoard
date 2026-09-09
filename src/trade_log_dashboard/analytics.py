@@ -65,6 +65,7 @@ def analyze_trade_log(csv_path: str | Path) -> dict[str, Any]:
                 run_id,
                 trade_id,
                 COALESCE(NULLIF(batch_id, ''), trade_id) AS batch_key,
+                (batch_id IS NULL OR batch_id = '') AS is_unbatched,
                 batch_id,
                 leg_id,
                 strategy,
@@ -98,7 +99,7 @@ def analyze_trade_log(csv_path: str | Path) -> dict[str, Any]:
                 SUM(fees) AS fees,
                 SUM(gross_pnl - fees) AS net_pnl
             FROM legs
-            GROUP BY batch_key
+            GROUP BY batch_key, is_unbatched
             """
         )
         connection.execute(
@@ -124,7 +125,7 @@ def analyze_trade_log(csv_path: str | Path) -> dict[str, Any]:
                     MIN(entry_time) AS start_time,
                     MAX(exit_time) AS end_time,
                     COUNT(*) AS leg_count,
-                    COUNT(DISTINCT batch_key) AS batch_count,
+                    (SELECT COUNT(*) FROM batches) AS batch_count,
                     COUNT(DISTINCT CAST(exit_time AS DATE)) AS traded_days,
                     COUNT(DISTINCT symbol) AS symbols,
                     SUM(gross_pnl) AS gross_pnl,
@@ -141,6 +142,8 @@ def analyze_trade_log(csv_path: str | Path) -> dict[str, Any]:
                 SELECT
                     AVG(net_pnl) AS average_batch_pnl,
                     MEDIAN(net_pnl) AS median_batch_pnl,
+                    AVG(CASE WHEN net_pnl > 0 THEN net_pnl END) AS average_win_batch,
+                    AVG(CASE WHEN net_pnl < 0 THEN net_pnl END) AS average_loss_batch,
                     SUM(CASE WHEN net_pnl > 0 THEN 1 ELSE 0 END) AS wins,
                     SUM(CASE WHEN net_pnl < 0 THEN 1 ELSE 0 END) AS losses,
                     100.0 * SUM(CASE WHEN net_pnl > 0 THEN 1 ELSE 0 END) / COUNT(*) AS win_rate,
@@ -165,7 +168,7 @@ def analyze_trade_log(csv_path: str | Path) -> dict[str, Any]:
                 ), peaks AS (
                     SELECT
                         *,
-                        MAX(equity) OVER (ORDER BY day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+                        GREATEST(0, MAX(equity) OVER (ORDER BY day ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW))
                             AS peak
                     FROM curve
                 )
@@ -176,6 +179,7 @@ def analyze_trade_log(csv_path: str | Path) -> dict[str, Any]:
             )
         )
         day_values = [float(row["net_pnl"]) for row in daily]
+        overview["traded_days"] = len(daily)
         winning_days = [value for value in day_values if value > 0]
         losing_days = [value for value in day_values if value < 0]
         day_mean = sum(day_values) / len(day_values)
@@ -207,6 +211,8 @@ def analyze_trade_log(csv_path: str | Path) -> dict[str, Any]:
                 "longest_loss_streak": _longest_streak(batch_values, winning=False),
                 "win_days": len(winning_days),
                 "loss_days": len(losing_days),
+                "breakeven_days": len(day_values) - len(winning_days) - len(losing_days),
+                "day_loss_rate": 100.0 * len(losing_days) / len(day_values),
                 "day_win_rate": 100.0 * len(winning_days) / len(day_values),
                 "average_win_day": sum(winning_days) / len(winning_days) if winning_days else None,
                 "average_loss_day": sum(losing_days) / len(losing_days) if losing_days else None,
@@ -240,7 +246,9 @@ def analyze_trade_log(csv_path: str | Path) -> dict[str, Any]:
                 else None
             ),
             "net_without_best_day": float(overview["net_pnl"]) - best_day,
-            "net_without_best_and_worst": float(overview["net_pnl"]) - best_day - worst_day,
+            "net_without_best_and_worst": (
+                float(overview["net_pnl"]) - best_day - worst_day if len(day_values) > 1 else 0.0
+            ),
         }
 
         monthly = _rows(
@@ -258,10 +266,10 @@ def analyze_trade_log(csv_path: str | Path) -> dict[str, Any]:
                 ), month_peaks AS (
                     SELECT
                         *,
-                        MAX(month_equity) OVER (
+                        GREATEST(0, MAX(month_equity) OVER (
                             PARTITION BY month ORDER BY day
                             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-                        ) AS month_peak
+                        )) AS month_peak
                     FROM month_curve
                 )
                 SELECT
@@ -269,7 +277,7 @@ def analyze_trade_log(csv_path: str | Path) -> dict[str, Any]:
                     SUM(net_pnl) AS net_pnl,
                     MAX(net_pnl) AS best_day,
                     MIN(net_pnl) AS worst_day,
-                    MAX(month_equity) AS high,
+                    GREATEST(0, MAX(month_equity)) AS high,
                     ARG_MAX(month_equity, day) AS close,
                     MIN(month_equity - month_peak) AS max_drawdown,
                     COUNT(*) AS traded_days

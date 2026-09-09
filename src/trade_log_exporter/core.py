@@ -183,6 +183,8 @@ def validate_trade_log_csv(
     trade_ids = [record.trade_id for record in records]
     if len(trade_ids) != len(set(trade_ids)):
         raise TradeLogError("trade_id values must be unique within one CSV")
+    if len({record.run_id for record in records}) > 1:
+        raise TradeLogError("All rows in one CSV must have the same run_id")
 
     return ExportReceipt(
         output_path=path,

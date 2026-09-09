@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
+  <a class="skip-link" href="#mainContent">Skip to content</a>
   <header class="topbar">
     <a class="brand" href="/" aria-label="Trade-log Analytics home">
       <span class="brand-mark" aria-hidden="true">T</span>
@@ -15,21 +16,98 @@
     </a>
     <div class="topbar-actions">
       <span class="local-badge">Local workspace</span>
+      <button class="secondary-button" id="historyButton" type="button">Best history</button>
+      <button class="secondary-button" id="storageButton" type="button">Storage</button>
+      <button class="secondary-button" id="backToSweepButton" type="button" hidden>View sweep comparison</button>
+      <button class="secondary-button" id="newRunButton" type="button">New backtest</button>
       <button class="secondary-button" id="replaceButton" type="button" hidden>Upload another CSV</button>
     </div>
   </header>
 
-  <main>
-    <section class="upload-view" id="uploadView" aria-labelledby="uploadTitle">
+  <main id="mainContent">
+    <section class="runner-panel panel" id="runnerPanel" aria-labelledby="runnerTitle">
+      <div class="panel-heading"><div><h1 id="runnerTitle">Run a local backtest</h1><p>Upload your Python strategy, connect market data, then review calculated results.</p></div><button class="secondary-button" id="csvModeButton" type="button">I already have a trades CSV</button></div>
+      <form id="runForm">
+        <div class="run-grid">
+          <div class="run-column">
+            <label for="strategyFiles">Python strategy</label>
+            <input id="strategyFiles" type="file" accept=".py" required>
+            <p class="field-help">Choose the strategy you want to run. Single or sweep mode is read from the Python file.</p>
+            <input id="entrypoint" type="hidden">
+          </div>
+          <div class="run-column">
+            <label for="datasetSelect">Dataset to backtest</label><select id="datasetSelect" required><option value="">Loading project datasets…</option></select>
+            <p id="datasetHint" class="field-help" role="status">Choose the expiry dataset your strategy should run against.</p>
+            <div class="dataset-coverage" id="datasetCoverage" aria-live="polite"><span>Available data period</span><strong>Choose a dataset to see its coverage</strong><small>The complete available period will be backtested.</small></div>
+            <details class="run-config"><summary>Strategy parameters and execution settings</summary><label for="runConfig">Additional configuration (JSON)</label><textarea id="runConfig" rows="11" spellcheck="false">{
+  "instrument": {"symbol": "NIFTY", "timeframe": "1m"},
+  "execution": {"slippage": 0.005, "fees_per_leg": 0, "timezone": "Asia/Kolkata"},
+  "parameters": {}
+}</textarea><p class="field-help">Optional overrides are passed to strategies that support them. The uploaded strategy owns its lot size, capital model and trading rules.</p></details>
+            <p class="execution-note">Python runs on this computer with your account’s permissions. Run only code you trust. Market data is supplied by you; no prices are downloaded.</p>
+            <div class="run-actions"><button class="primary-button" id="runButton" type="submit">Run backtest</button><button class="secondary-button" id="cancelRun" type="button" hidden>Cancel run</button></div>
+          </div>
+        </div>
+      </form>
+      <p id="runStatus" class="equity-note" role="status" aria-live="polite"></p>
+      <details id="runLogPanel" class="run-log" hidden><summary>Run log</summary><pre id="runLog"></pre></details>
+    </section>
+    <section class="panel storage-panel" id="storagePanel" hidden aria-labelledby="storageTitle">
+      <div class="panel-heading">
+        <div><h1 id="storageTitle" tabindex="-1">Storage</h1><p>Choose where this computer keeps market data. Application files can update without moving your data or results.</p></div>
+        <button class="secondary-button" id="storageDoneButton" type="button">Done</button>
+      </div>
+      <form id="storageForm">
+        <label for="datasetRoot">Dataset folder</label>
+        <div class="path-control"><input id="datasetRoot" type="text" autocomplete="off" spellcheck="false" required></div>
+        <p class="field-help">Enter the full path to the parent folder containing “nifty current week”, “next week”, “next2week”, and “nifty monthly”.</p>
+        <div class="storage-actions"><button class="primary-button" id="saveStorage" type="submit">Save dataset folder</button><p id="storageStatus" role="status" aria-live="polite"></p></div>
+      </form>
+      <dl class="storage-locations">
+        <div><dt>Settings</dt><dd id="settingsFile">—</dd></div>
+        <div><dt>Application logs</dt><dd id="logsRoot">—</dd></div>
+        <div><dt>Saved results</dt><dd id="resultsRoot">—</dd></div>
+      </dl>
+    </section>
+    <section class="panel history-panel" id="historyPanel" hidden aria-labelledby="historyTitle">
+      <div class="panel-heading">
+        <div><h1 id="historyTitle" tabindex="-1">Best strategy history</h1><p>One automatically recommended result is saved from each completed sweep.</p></div>
+        <span class="count-badge" id="historyCount">—</span>
+      </div>
+      <p class="sweep-note" id="historyStatus" role="status" aria-live="polite"></p>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Saved best strategy results">
+        <table>
+          <thead><tr><th>Saved</th><th>Strategy</th><th>Dataset</th><th>Parameters</th><th class="numeric">Score</th><th class="numeric">Net P&amp;L</th><th class="numeric">Max drawdown</th><th><span class="sr-only">Action</span></th></tr></thead>
+          <tbody id="historyRows"></tbody>
+        </table>
+      </div>
+    </section>
+    <div id="runDownloads" class="run-downloads" hidden></div>
+    <section class="panel sweep-panel" id="sweepPanel" hidden aria-labelledby="sweepTitle">
+      <div class="panel-heading sweep-heading">
+        <div><h1 id="sweepTitle" tabindex="-1">Sweep comparison</h1><p id="sweepDescription">Each row is an independent backtest against the same dataset and dates. The recommended result opens automatically.</p></div>
+        <div class="sweep-heading-actions"><span class="count-badge" id="sweepCount">—</span><button class="primary-button" id="viewSelectedSweep" type="button" disabled>Run selected &amp; view analytics</button></div>
+      </div>
+      <div class="sweep-note" id="sweepNote">Recommended score: 35% P&amp;L, 35% lower drawdown, 15% average win/loss ratio, 10% win rate, and 5% fewer consecutive losses. You can override the recommendation.</div>
+      <div class="table-scroll sweep-table-scroll" tabindex="0" role="region" aria-label="Sweep variation comparison">
+        <table>
+          <thead id="sweepHead"><tr><th>Select</th><th>Rank</th><th>Combination</th><th>Parameters</th><th class="numeric">Score</th><th class="numeric">Net P&amp;L</th><th class="numeric">Max drawdown</th><th class="numeric">Win rate</th><th class="numeric">Max consecutive losses</th><th class="numeric">Average profit</th><th class="numeric">Average loss</th><th class="numeric">Avg win/loss</th><th class="numeric">Profit factor</th><th class="numeric">Trades</th><th><span class="sr-only">Action</span></th></tr></thead>
+          <tbody id="sweepRows"></tbody>
+        </table>
+      </div>
+    </section>
+    <div class="upload-status" id="uploadStatus" role="status" aria-live="polite" aria-atomic="true"></div>
+    <section class="upload-view" id="uploadView" aria-labelledby="uploadTitle" hidden>
       <div class="upload-copy">
         <p class="context-label">Independent backtest review</p>
-        <h1 id="uploadTitle">Turn executed trades into evidence.</h1>
-        <p>Upload the canonical CSV created by your backtest. The dashboard validates every row, then calculates P&amp;L and risk metrics locally using DuckDB.</p>
+        <h1 id="uploadTitle">Understand the return.<br>Inspect the risk.</h1>
+        <p>Bring your backtest’s trade log into a focused workspace for performance, drawdown and consistency.</p>
         <ul class="trust-list" aria-label="Processing guarantees">
           <li><span aria-hidden="true">✓</span> No LLM-generated P&amp;L</li>
           <li><span aria-hidden="true">✓</span> Your file stays on this device</li>
           <li><span aria-hidden="true">✓</span> Exact schema validation before analysis</li>
         </ul>
+        <div class="upload-guide"><h2>Start with your executions</h2><p><strong>trades.csv</strong> unlocks realised performance and batch analysis.</p><p><strong>equity.csv</strong> can be added next to inspect intraday losses while positions were open.</p></div>
       </div>
 
       <div class="drop-zone" id="dropZone">
@@ -40,7 +118,7 @@
         <h2>Drop your trades.csv here</h2>
         <p>Canonical schema v1 · CSV up to 25 MB</p>
         <button class="primary-button" id="chooseButton" type="button">Choose CSV file</button>
-        <div class="upload-status" id="uploadStatus" role="status" aria-live="polite"></div>
+        <small class="upload-help">Exported from your backtest · No account required</small>
       </div>
     </section>
 
@@ -51,7 +129,7 @@
             <span class="status-badge"><span aria-hidden="true">✓</span> Validated</span>
             <span id="dateRange"></span>
           </div>
-          <h1 id="strategyTitle">Strategy report</h1>
+          <h1 id="strategyTitle" tabindex="-1">Strategy report</h1>
           <p id="runMeta"></p>
         </div>
         <div class="source-summary">
@@ -60,18 +138,23 @@
         </div>
       </div>
 
+      <nav class="report-nav" aria-label="Report sections">
+        <a href="#performance">Performance</a><a href="#intraday">Intraday risk</a><a href="#consistency">Consistency</a><a href="#monthly">Monthly</a><a href="#batches">Batches</a>
+        <span>Amounts in INR</span>
+      </nav>
+
       <aside class="assumption" id="feeNote">
         <strong>Cost assumption</strong>
         <span>Brokerage and statutory charges are not included. Fees are zero.</span>
       </aside>
 
-      <section class="kpi-strip" aria-label="Primary performance indicators">
+      <section class="kpi-strip" id="performance" aria-label="Primary performance indicators">
         <article><span>Net P&amp;L</span><strong id="netPnl">—</strong><small>after recorded fees</small></article>
         <article><span>Gross P&amp;L</span><strong id="grossPnl">—</strong><small>from executed prices</small></article>
-        <article><span>Max drawdown</span><strong id="maxDrawdown">—</strong><small>peak to trough</small></article>
+        <article><span>Daily realised drawdown</span><strong id="maxDrawdown">—</strong><small>peak to trough</small></article>
         <article><span>Win rate</span><strong id="winRate">—</strong><small id="winLossCount">closed batches</small></article>
         <article><span>Sharpe</span><strong id="sharpe">—</strong><small>traded-day annualised</small></article>
-        <article><span>Profit factor</span><strong id="profitFactor">—</strong><small>gross wins ÷ losses</small></article>
+        <article><span>Profit factor</span><strong id="profitFactor">—</strong><small>net batch wins ÷ losses</small></article>
       </section>
 
       <div class="analysis-grid">
@@ -80,7 +163,8 @@
             <div><h2 id="equityTitle">Cumulative net P&amp;L</h2><p>Daily realised performance and drawdown</p></div>
             <strong id="equityTotal">—</strong>
           </div>
-          <div class="chart-shell" id="equityChart" role="img" aria-label="Cumulative P and L chart"></div>
+          <div class="chart-shell" id="equityChart" role="img" aria-label="Cumulative P and L chart" tabindex="0"></div>
+          <p class="chart-legend"><span>Cumulative net P&amp;L (line)</span><span>Drawdown (shaded below zero)</span></p>
         </section>
 
         <section class="metric-ledger" aria-label="Detailed performance metrics">
@@ -95,7 +179,25 @@
         </section>
       </div>
 
-      <section class="panel diagnostic-panel" aria-labelledby="diagnosticTitle">
+      <section class="panel diagnostic-panel" id="intraday" aria-labelledby="intradayTitle">
+        <div class="panel-heading">
+          <div><h2 id="intradayTitle">Intraday and unrealised risk</h2><p>Drawdown from recorded realised + open-position P&amp;L</p></div>
+          <button class="secondary-button" id="equityButton" type="button">Add equity CSV</button>
+          <input id="equityInput" type="file" accept=".csv,text/csv" hidden>
+        </div>
+        <p id="equityStatus" class="equity-note" role="status" aria-live="polite">Upload equity.csv from this backtest to measure losses while positions were open. Entry and exit prices alone cannot reveal them.</p>
+        <div id="intradayReport" hidden>
+          <div class="metric-ledger">
+            <div><span>Observed mark-to-market drawdown</span><strong id="intradayDrawdown">—</strong></div>
+            <div><span>Worst open-position P&amp;L</span><strong id="worstUnrealized">—</strong></div>
+          </div>
+          <p class="equity-note" id="intradayCoverage"></p>
+          <div class="chart-shell" id="intradayChart" role="img" aria-label="Observed equity including unrealised P and L" tabindex="0"></div>
+          <p class="equity-note">Engine-supplied marks; drawdown independently calculated. Losses between snapshots are not observed. Times shown in UTC.</p>
+        </div>
+      </section>
+
+      <section class="panel diagnostic-panel" id="consistency" aria-labelledby="diagnosticTitle">
         <div class="panel-heading">
           <div><h2 id="diagnosticTitle">Consistency and concentration</h2><p>How often the strategy wins, how it loses, and whether a few days dominate the result</p></div>
         </div>
@@ -105,8 +207,9 @@
             <dl>
               <div><dt>Winning days</dt><dd id="winDays">—</dd></div>
               <div><dt>Losing days</dt><dd id="lossDays">—</dd></div>
-              <div><dt>Average green day</dt><dd id="averageWinDay">—</dd></div>
-              <div><dt>Average red day</dt><dd id="averageLossDay">—</dd></div>
+              <div><dt>Break-even days</dt><dd id="breakevenDays">—</dd></div>
+              <div><dt>Average winning day</dt><dd id="averageWinDay">—</dd></div>
+              <div><dt>Average losing day</dt><dd id="averageLossDay">—</dd></div>
               <div><dt>Day risk : reward</dt><dd id="dayRiskReward">—</dd></div>
               <div><dt>Median day</dt><dd id="medianDay">—</dd></div>
               <div><dt>Longest underwater</dt><dd id="underwaterDays">—</dd></div>
@@ -126,12 +229,12 @@
         </div>
       </section>
 
-      <section class="panel monthly-panel" aria-labelledby="monthlyTitle">
+      <section class="panel monthly-panel" id="monthly" aria-labelledby="monthlyTitle">
         <div class="panel-heading">
           <div><h2 id="monthlyTitle">Monthly performance</h2><p>Net P&amp;L grouped by exit month</p></div>
         </div>
         <div class="chart-shell monthly-chart" id="monthlyChart" role="img" aria-label="Monthly P and L bar chart"></div>
-        <div class="table-scroll monthly-table-scroll">
+        <div class="table-scroll monthly-table-scroll" tabindex="0" role="region" aria-label="Monthly performance data">
           <table>
             <thead><tr><th>Month</th><th class="numeric">High</th><th class="numeric">Close</th><th class="numeric">Best day</th><th class="numeric">Worst day</th><th class="numeric">Max drawdown</th><th class="numeric">Days</th></tr></thead>
             <tbody id="monthlyRows"></tbody>
@@ -139,12 +242,13 @@
         </div>
       </section>
 
-      <section class="panel table-panel" aria-labelledby="tradesTitle">
+      <section class="panel table-panel" id="batches" aria-labelledby="tradesTitle">
         <div class="panel-heading">
           <div><h2 id="tradesTitle">Closed batches</h2><p>Most recent 100, calculated from raw legs</p></div>
           <span class="count-badge" id="batchCount">—</span>
         </div>
-        <div class="table-scroll">
+        <div class="table-toolbar"><label for="batchSearch">Find a batch<input type="search" id="batchSearch" placeholder="Search the latest 100 by batch ID"></label><label for="batchOutcome">Outcome<select id="batchOutcome"><option value="all">All outcomes</option><option value="win">Winning</option><option value="loss">Losing</option><option value="flat">Break-even</option></select></label><span id="batchResults" role="status" aria-live="polite"></span></div>
+        <div class="table-scroll" tabindex="0" role="region" aria-label="Recent closed batches">
           <table>
             <thead><tr><th>Batch</th><th>Exit</th><th class="numeric">Legs</th><th class="numeric">Gross P&amp;L</th><th class="numeric">Fees</th><th class="numeric">Net P&amp;L</th></tr></thead>
             <tbody id="tradeRows"></tbody>
@@ -165,5 +269,6 @@
 
   <footer>Analytics are calculated from uploaded executions and are not financial advice.</footer>
   <script src="/app.js" defer></script>
+  <script src="/runner.js" defer></script>
 </body>
 </html>

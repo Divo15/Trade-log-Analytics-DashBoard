@@ -8,6 +8,7 @@ from .core import (
     validate_trade_log_csv,
 )
 from .schema import CSV_COLUMNS, SCHEMA_VERSION, TradeRecord
+from .equity import EQUITY_COLUMNS, export_equity_snapshots
 from .sweep import (
     SWEEP_CSV_COLUMNS,
     SWEEP_SCHEMA_VERSION,
@@ -17,6 +18,8 @@ from .sweep import (
 )
 
 __all__ = [
+    "EQUITY_COLUMNS",
+    "export_equity_snapshots",
     "CSV_COLUMNS",
     "SCHEMA_VERSION",
     "ExportReceipt",

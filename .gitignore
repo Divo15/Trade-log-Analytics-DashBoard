@@ -1,4 +1,6 @@
 __pycache__/
+.venv/
+/codex-backtest-strategy-skill/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
@@ -6,10 +8,15 @@ __pycache__/
 .tmp/
 dist/
 build/
+release/
 
 # Backtest results and sensitive uploads
 output/
+outputs/
 uploads/
+history/
+data/db/
+data/db.previous-*/
 *.duckdb
 *.manifest.json
 dashboard-preview.png
@@ -19,3 +26,7 @@ dashboard-expanded-preview.png
 # Environment secrets
 .env
 .env.*
+
+# Local distribution archives and icon drafts
+/colab_strategy_files.zip
+/strategies/*.png

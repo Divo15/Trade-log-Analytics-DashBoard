@@ -1,9 +1,31 @@
-# Google Colab Backtest and Analytics Architecture
+# Local Backtest and Analytics Architecture
 
 ## System boundary
 
-Python strategies and backtesting engines run in the user's Google Colab
-runtime. The analytics website never executes uploaded Python.
+The default workflow runs a local Python server and opens its interface in a web browser.
+The terminal owns the server lifetime; Ctrl+C shuts down the server and worker.
+The interface submits strategy files, configuration and either a data ZIP or a
+local data path. A single-job manager handles polling, cancellation, a 30-minute
+deadline and temporary artifacts. The worker calls `run_strategy(context)`,
+validates and exports actual completed trades, then independently computes
+analytics. Single runs retain the 30-minute deadline; sweep jobs can run for up
+to seven days. Sweeps execute all declared parameter sets sequentially,
+calculate a compact summary for each variation, discard its temporary trade and
+equity artifacts, continue after an individual variation fails, and expose
+comparison rows without combining alternative P&L. After explicit user selection,
+the worker reruns that exact parameter mapping, retains its validated artifacts,
+and rejects the result if core metrics do not reproduce. Optional engine equity
+snapshots are reconciled and analysed too.
+The server is loopback-only; run mutations require a custom header and enforce
+same-origin/Host checks. Subprocess execution is not a security sandbox.
+Settings, rotating logs, cached metadata, and saved results use per-user writable
+application-data directories. The selected dataset parent can live anywhere and is
+stored atomically in settings. The catalog fingerprints every summary and chain
+file by relative path, size, and modification time, so unchanged datasets avoid
+Parquet scans while changed datasets refresh independently. A process lock prevents
+duplicate scans from concurrent UI requests.
+The earlier Colab workflow below remains an optional integration. Its execution
+boundary applies to that workflow, not to the new local runner.
 
 ```text
 Google Colab

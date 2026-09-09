@@ -6,17 +6,27 @@ product
 
 ## Users
 
-Trading-strategy users who run Python backtests in Google Colab, then upload a
-deterministic trade log for analysis without trusting LLM-generated P&L.
+Trading-strategy users who run trusted Python strategies locally against their
+market data, or import a completed trade log for independent analysis.
 
 ## Product Purpose
 
-Turn one validated Colab-generated `trades.csv` file into a professional
-analytics dashboard. The website uploads, revalidates, stores, and independently
-calculates performance from raw executions. It rejects incompatible files,
-makes every cost assumption explicit, and never executes Python strategies or
-backtesting engines. Version one runs locally, requires no account, and analyzes
-one backtest at a time.
+Run a trusted single strategy or parameter sweep from the local UI with a market-data ZIP
+or local path, export authoritative executions, and calculate performance
+independently. Keep a CSV analysis workflow for existing results. Strategy
+execution runs in a separate process with logs, cancellation and a time limit;
+it is not a security sandbox. Make every cost and sampling assumption explicit.
+The desktop app starts and stops its local Python backend automatically, binds to
+an available localhost port, requires no account, and runs one job at a time.
+Each teammate selects their dataset parent folder, while settings, logs, cached
+metadata, and saved results remain in that operating-system user's writable app-data folder.
+Sweep variations execute sequentially and remain separate. The optimizer compares
+all declared combinations with a transparent weighted recommendation that emphasizes
+high P&L and low drawdown. The recommended combination is rerun and opened
+automatically; the user can return to the comparison and override it. Each sweep
+row retains compact metrics only. The chosen combination is rerun to create and verify its complete analytics and downloadable
+artifacts. Only the automatically recommended winner is added to persistent
+history; opening a manual override does not add another history entry.
 
 ## Brand Personality
 

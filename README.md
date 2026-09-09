@@ -1,25 +1,129 @@
 # Trade-log Analytics Dashboard
 
-This repository contains the deterministic trade-log exporter, a standard
-Google Colab backtest runner template, and a web dashboard that independently
-calculates analytics from an uploaded canonical CSV.
+Run trusted Python backtests locally from a web UI, then independently calculate
+analytics from their exported executions. The repository also supports importing
+existing canonical CSVs and retains an optional legacy Colab notebook.
 
 ## Run the dashboard
 
-Install the repository, then start the local application:
+On each team computer, run the one-time environment setup from the project
+folder:
 
-```bash
-python -m pip install -e .
-trade-dashboard
+```bat
+setup_environment.cmd
 ```
 
-The browser opens at `http://127.0.0.1:8765`. Upload a canonical `trades.csv`;
-the local version processes it temporarily. A hosted version may revalidate and
-store it before analysis, but it never executes the strategy or backtest.
+This creates `.venv` and installs the dashboard and shared strategy stack:
+pandas, NumPy, DuckDB, PyArrow, Matplotlib, SciPy, scikit-learn, Seaborn,
+Plotly, Statsmodels and OpenPyXL. Python 3.11, 3.12 or 3.13 must already be installed
+on the computer. Packages installed elsewhere on the computer are ignored.
+
+Open the browser dashboard with:
+
+```bat
+start_dashboard.cmd
+```
+
+The launcher uses `.venv` and opens the dashboard in your browser.
+Keep the server terminal open while using it; press Ctrl+C there to stop it.
+Uploaded strategies run using the same Python environment.
+
+Each teammate can enter the dataset parent folder path in **Storage** in the
+app. Startup reads a small coverage index from the user's application-data cache
+instead of rescanning Parquet data. A dataset is recalculated automatically when
+its summary or chain files are added, removed, resized, or modified.
+
+On Windows, writable application data lives under
+`%LOCALAPPDATA%\TradeLogAnalytics`: settings in `settings\settings.json`, rotating
+logs in `logs\application.log`, cached metadata in `cache`, and saved best results
+in `results`. These paths contain no hard-coded username and are preserved when
+application files are replaced. Existing project `history` is copied into the
+user results folder once without overwriting an existing result.
+
+The equivalent manual development commands are:
+
+```bash
+python -m venv .venv
+.venv\Scripts\python -m pip install -e ".[strategy]"
+.venv\Scripts\python -m trade_log_dashboard.server
+```
+
+For browser-based development, `start_dashboard.cmd -NoBrowser` starts only the
+local server and prints its assigned address. A specific development port can be
+requested with `start_dashboard.cmd -NoBrowser -Port 8790`.
+
+1. Select your strategy `.py`. Add sibling modules under the optional supporting-files section only if needed. The strategy upload is automatically the entry point.
+2. Choose **Weekly**, **Next weekly**, or **Monthly** from the configured datasets.
+3. These map respectively to `nifty current week`, `next week`, and
+   `nifty monthly` beneath the configured parent folder. The chosen folder is passed directly as
+   `context.market_data`; it is not substituted with another expiry dataset.
+4. Review the detected available period and optional strategy parameters. The
+   strategy owns its lot size and capital model. The included NIFTY strategy
+   defaults to lot size 65 and ₹300,000 capital per trade. The runner uses the full date range where both
+   summary and option-chain data exist for the selected dataset.
+5. Click **Run backtest**. Follow logs, cancel if needed, and view results
+   automatically when the run finishes. Download the trade CSV and manifest.
+
+The runner calls `run_strategy(context)`, not the script's Colab `main()`.
+Contract versions 1 and 2 are accepted with `RUN_MODE = "single"`. Return
+`completed_trades`, an integer `completed_trade_count`, and an optional
+`trade_mapper`. Optional `equity_snapshots` are exported and shown automatically.
+The included compatibility adapter also recognizes standalone scripts containing
+`StrategyConfig`, `DataLoader`, and `ProtectedStraddleBacktester`. It supplies the
+selected project dataset and detected period, preserves the strategy's own settings,
+and records the engine's mark-to-market checks for intraday risk. Other standalone
+engine shapes still need an adapter to this interface.
+
+For parameter optimization, declare `RUN_MODE = "sweep"` and a non-empty
+`SWEEP_PARAMETER_SETS` sequence of mappings. The local runner executes all declared
+variations sequentially against the same selected dataset. One invalid variation
+is reported without stopping later combinations. Live progress includes completed
+count and an estimated remaining time. The comparison table shows every variation's
+parameters, net P&L, maximum drawdown, win rate, maximum consecutive losses,
+average profit, average loss, profit factor and trade count. The user selects the
+winning combination using their own criteria. Profitable combinations are ranked
+with a transparent weighted score: 35% relative P&L, 35% lower drawdown, 15%
+average-win/average-loss ratio, 10% win rate and 5% fewer consecutive losses.
+The highest score is automatically rerun and its full analytics open without an
+extra confirmation click. The comparison table remains available for a manual override. Per-combination trade and equity
+files are temporary and are discarded after their metrics are calculated. The
+recommended combination is rerun once to create its validated trade log, equity
+file and complete analytics, then saved persistently in the per-user results folder. Manual
+overrides are displayed but are not added to history. The rerun must reproduce
+the sweep P&L, drawdown, win rate, and trade count or it fails with a
+deterministic-strategy error. Use **Best history** to reopen saved reports after
+restarting the application.
+
+Python runs with your account's permissions: use trusted code. This is process
+separation, not a security sandbox. Additional strategy dependencies must be
+installed in the Python environment that launches the dashboard; the standard
+NIFTY dependencies (pandas, DuckDB and timezone data) are included.
+
+Limits: one running job, 30 minutes per single run, seven days per sweep, 2 MiB per Python file, 256 MiB
+encoded upload, and 2 GiB / 20,000 files for extracted data. Use a local data
+path for larger datasets. The latest five working runs remain temporary for the
+server session. Only each sweep's recommended winner is kept permanently, with
+its analytics and downloadable trade/equity outputs.
+Active runs reconnect after a browser refresh. No market data is downloaded.
+
+The local `data/db` copy is excluded from Git. The downloaded source archive is
+preserved. Python caches and DuckDB scratch directories were excluded from the
+copy. Weekly, Next Weekly, Next2Week and Monthly are available in the NIFTY
+runner. Stock-options data is also saved, but uses a different layout and is not
+offered as a NIFTY expiry dataset. ZIP/path inputs remain supported by the backend
+for integrations; the UI presents only saved datasets.
+
+Use **I already have a trades CSV** to analyse existing results without running
+Python. The CSV analysis upload limit remains 25 MiB.
 
 The first dashboard version supports one backtest at a time. It calculates gross and net P&L, drawdown, win rate, profit factor, traded-day Sharpe, streaks, daily equity, monthly performance, and closed-batch results. When `fees` are zero it explicitly states that brokerage and statutory charges are excluded.
 
 ## What the package does
+
+For intraday and unrealised risk, upload an optional `equity.csv` after the
+trade log. It contains actual engine-recorded valuation snapshots; the dashboard
+calculates observed mark-to-market drawdown and checks run identity and final
+P&L reconciliation. See [engine integration and sampling limits](integration/EQUITY_SNAPSHOT_CONTRACT.md).
 
 `trade-log-exporter` copies actual completed trades from a Python backtesting engine into one canonical CSV format. It validates raw execution fields, refuses derived P&L fields, verifies row counts, writes atomically, and creates a checksum manifest.
 
@@ -162,6 +266,9 @@ After Colab downloads the validated CSV, upload it to the dashboard. See
 [`ARCHITECTURE.md`](ARCHITECTURE.md) for the complete boundary.
 
 ## Test
+
+See [current limitations and improvement backlog](LIMITATIONS.md) for reporting,
+data, performance, and hosting boundaries.
 
 ```bash
 python -m unittest discover -s tests -v
