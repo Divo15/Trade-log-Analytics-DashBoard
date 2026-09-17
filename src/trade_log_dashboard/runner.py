@@ -21,6 +21,7 @@ HISTORY_ROOT = Path(__file__).resolve().parents[2] / "history"
 HISTORY_ARTIFACTS = {
     "trades.csv", "trades.csv.manifest.json", "equity.csv", "run.log"
 }
+MAX_SAVED_HISTORY = 20
 
 
 def _declared_run_mode(source):
@@ -274,10 +275,26 @@ class LocalRunner:
             if target.exists():
                 shutil.rmtree(target)
             temporary.replace(target)
+            self._prune_saved_history()
             job["history_id"] = history_id
         except Exception:
             shutil.rmtree(temporary, ignore_errors=True)
             raise
+
+    def _prune_saved_history(self):
+        records = []
+        for folder in self.history_root.iterdir():
+            metadata_path = folder / "metadata.json"
+            if not folder.is_dir() or not metadata_path.is_file():
+                continue
+            try:
+                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                continue
+            records.append((metadata.get("created_at", ""), folder))
+        records.sort(key=lambda item: item[0], reverse=True)
+        for _, folder in records[MAX_SAVED_HISTORY:]:
+            shutil.rmtree(folder, ignore_errors=True)
 
     def history(self):
         records = []

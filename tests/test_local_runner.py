@@ -8,7 +8,7 @@ import unittest
 import zipfile
 from unittest.mock import patch
 
-from trade_log_dashboard.runner import LocalRunner, SWEEP_RUN_TIMEOUT, extract_market_data
+from trade_log_dashboard.runner import LocalRunner, MAX_SAVED_HISTORY, SWEEP_RUN_TIMEOUT, extract_market_data
 from trade_log_dashboard.worker import SELECTION_WEIGHTS, _rank_sweep
 
 STRATEGY = '''
@@ -340,6 +340,35 @@ def run_strategy(context):
         self.assertEqual([record["id"] for record in reopened_records], [third_history_id, best_history_id])
         self.assertEqual(reopened.history_item(third_history_id)["parameters"], {"take_profit": .8})
         self.assertEqual(reopened.history_item(best_history_id)["parameters"], {"take_profit": 1.0})
+
+    def test_saved_history_keeps_twenty_most_recent_results(self):
+        for index in range(MAX_SAVED_HISTORY + 1):
+            folder = self.market / f"job-{index}"
+            folder.mkdir()
+            (folder / "trades.csv").write_text("trades\n", encoding="utf-8")
+            job = {
+                "folder": folder,
+                "history_parent_id": f"saved{index}",
+                "history_summary": {
+                    "parameters": {"index": index},
+                    "rank": index + 1,
+                    "metrics": {"net_pnl": index},
+                },
+                "result": {
+                    "analysis": {
+                        "overview": {"strategy": "Retention test", "net_pnl": index},
+                        "dataset": {"id": "test", "label": "Test"},
+                    },
+                },
+            }
+            self.runner._save_history(f"job{index}", job)
+
+        records = self.runner.history()
+        self.assertEqual(len(records), MAX_SAVED_HISTORY)
+        self.assertEqual(records[0]["id"], f"saved{MAX_SAVED_HISTORY}")
+        self.assertEqual(records[-1]["id"], "saved1")
+        self.assertFalse((self.market / "history" / "saved0").exists())
+        self.assertTrue((self.market / "history" / f"saved{MAX_SAVED_HISTORY}").exists())
 
     def test_selection_weights_prioritize_pnl_and_low_drawdown(self):
         self.assertEqual(SELECTION_WEIGHTS["net_pnl"], .35)
