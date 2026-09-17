@@ -2,6 +2,7 @@
 from collections import OrderedDict
 from hashlib import sha256
 from pathlib import Path
+import pickle
 import shutil
 from tempfile import TemporaryDirectory
 
@@ -24,9 +25,11 @@ class MarketDataLoader:
         self._memory = OrderedDict()
         self._disk = OrderedDict()
         self._partitioned = OrderedDict()
+        self._shared = OrderedDict()
         self._temporary = TemporaryDirectory(prefix="market-cache-", dir=directory)
         self.stats = dict(read_hits=0, read_misses=0, prepared_hits=0, prepared_misses=0,
-                          partition_hits=0, partition_misses=0)
+                          partition_hits=0, partition_misses=0,
+                          shared_hits=0, shared_misses=0)
 
     def __enter__(self):
         return self
@@ -38,6 +41,7 @@ class MarketDataLoader:
         self._memory.clear()
         self._disk.clear()
         self._partitioned.clear()
+        self._shared.clear()
         self.memory_bytes = self.disk_bytes = 0
         self._temporary.cleanup()
 
@@ -131,6 +135,10 @@ class MarketDataLoader:
             _, (old, old_size) = self._disk.popitem(last=False)
             old.unlink(missing_ok=True)
             self.disk_bytes -= old_size
+        while self._shared and self.disk_bytes + estimated_size > self.disk_limit:
+            _, (old, old_size) = self._shared.popitem(last=False)
+            old.unlink(missing_ok=True)
+            self.disk_bytes -= old_size
         while self._partitioned and self.disk_bytes + estimated_size > self.disk_limit:
             _, (old, old_size) = self._partitioned.popitem(last=False)
             shutil.rmtree(old, ignore_errors=True)
@@ -149,6 +157,10 @@ class MarketDataLoader:
                 _, (old, old_size) = self._disk.popitem(last=False)
                 old.unlink(missing_ok=True)
                 self.disk_bytes -= old_size
+            while self._shared and self.disk_bytes + size > self.disk_limit:
+                _, (old, old_size) = self._shared.popitem(last=False)
+                old.unlink(missing_ok=True)
+                self.disk_bytes -= old_size
             while self._partitioned and self.disk_bytes + size > self.disk_limit:
                 _, (old, old_size) = self._partitioned.popitem(last=False)
                 shutil.rmtree(old, ignore_errors=True)
@@ -159,6 +171,57 @@ class MarketDataLoader:
         except Exception:
             shutil.rmtree(destination, ignore_errors=True)
             raise
+
+    def shared_object(self, paths, key, build):
+        """Cache an immutable market-data object for all sweep combinations.
+
+        Objects are stored only in this worker's private temporary directory and
+        are invalidated by source path, size, and modification time. Callers must
+        never place positions, executions, simulation state, or mutable output in
+        this cache. Disk storage keeps large daily indexes reusable without
+        consuming the worker's bounded DataFrame memory cache.
+        """
+        sources = []
+        for source in sorted(Path(p).resolve() for p in paths):
+            stat = source.stat()
+            sources.append((str(source), stat.st_size, stat.st_mtime_ns))
+        token = self._key((sources, key))
+        if token in self._shared:
+            path, size = self._shared.pop(token)
+            self._shared[token] = (path, size)
+            self.stats["shared_hits"] += 1
+            with path.open("rb") as handle:
+                return pickle.load(handle)
+
+        self.stats["shared_misses"] += 1
+        value = build()
+        if self.disk_limit <= 0:
+            return value
+
+        path = Path(self._temporary.name) / (token + ".pickle")
+        try:
+            with path.open("wb") as handle:
+                pickle.dump(value, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            size = path.stat().st_size
+            if size > self.disk_limit:
+                path.unlink(missing_ok=True)
+                return value
+            while self._disk and self.disk_bytes + size > self.disk_limit:
+                _, (old, old_size) = self._disk.popitem(last=False)
+                old.unlink(missing_ok=True)
+                self.disk_bytes -= old_size
+            while self._shared and self.disk_bytes + size > self.disk_limit:
+                _, (old, old_size) = self._shared.popitem(last=False)
+                old.unlink(missing_ok=True)
+                self.disk_bytes -= old_size
+            if self.disk_bytes + size <= self.disk_limit:
+                self._shared[token] = (path, size)
+                self.disk_bytes += size
+            else:
+                path.unlink(missing_ok=True)
+        except (OSError, pickle.PickleError, TypeError, AttributeError):
+            path.unlink(missing_ok=True)
+        return value
 
     def prepare_frame(self, key, frames, prepare):
         """Reuse deterministic preparation using complete input-frame fingerprints."""

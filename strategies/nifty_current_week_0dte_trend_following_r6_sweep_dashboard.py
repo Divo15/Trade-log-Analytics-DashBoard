@@ -50,6 +50,7 @@ invented. Trading rules, defaults and all 144 sweep mappings are unchanged.
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import time
@@ -59,6 +60,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import duckdb
+import numpy as np
 import pandas as pd
 
 
@@ -350,44 +352,125 @@ def _partition_chain_cache(
     return partition(chain_paths, "r6-chain-by-trade-date-v1", build)
 
 
-def _frame_lookup(frame: pd.DataFrame) -> dict[pd.Timestamp, pd.DataFrame]:
-    if frame.empty:
-        return {}
-    return {pd.Timestamp(ts): group.copy() for ts, group in frame.groupby("ts", sort=True)}
+@dataclass(frozen=True)
+class QuoteBook:
+    """Quotes for one timestamp plus first-row strike access."""
+
+    strikes: np.ndarray
+    ce_close: np.ndarray
+    pe_close: np.ndarray
+    first_index_by_strike: dict[int, int]
+
+
+@dataclass(frozen=True)
+class QuoteLookup:
+    """Sorted timestamp and strike indexes prepared once per trading day."""
+
+    timestamps: tuple[pd.Timestamp, ...]
+    by_timestamp: dict[pd.Timestamp, QuoteBook]
+
+
+@dataclass(frozen=True)
+class SummaryLookup:
+    """Sorted futures rows supporting O(log n) at-or-before lookup."""
+
+    frame: pd.DataFrame
+    timestamps: pd.DatetimeIndex
+
+
+def _frame_lookup(frame: pd.DataFrame) -> QuoteLookup:
+    by_timestamp: dict[pd.Timestamp, QuoteBook] = {}
+    for ts, group in frame.groupby("ts", sort=True):
+        strikes = group["strike"].to_numpy(dtype=np.int64, copy=True)
+        ce_close = group["ce_close"].to_numpy(dtype=np.float64, copy=True)
+        pe_close = group["pe_close"].to_numpy(dtype=np.float64, copy=True)
+        strikes.flags.writeable = False
+        ce_close.flags.writeable = False
+        pe_close.flags.writeable = False
+        first_index_by_strike: dict[int, int] = {}
+        for index, strike in enumerate(strikes):
+            first_index_by_strike.setdefault(int(strike), index)
+        by_timestamp[pd.Timestamp(ts)] = QuoteBook(
+            strikes, ce_close, pe_close, first_index_by_strike
+        )
+    return QuoteLookup(tuple(by_timestamp), by_timestamp)
+
+
+def _load_chain_lookup(
+    market_data: Path,
+    day: Any,
+    market_data_loader: Any = None,
+    partitioned_chain: Path | None = None,
+) -> QuoteLookup:
+    """Reuse an immutable daily quote index across sweep combinations."""
+    day_iso = pd.Timestamp(day).date().isoformat()
+    if partitioned_chain is not None:
+        source_folder = partitioned_chain / f"trade_date={day_iso}"
+        sources = sorted(source_folder.glob("*.parquet"))
+    else:
+        source_folder = market_data / "nifty_chain"
+        sources = sorted(source_folder.glob("*.parquet")) if source_folder.is_dir() else []
+
+    def build() -> QuoteLookup:
+        chain = _load_chain_for_day(
+            market_data, day, market_data_loader, partitioned_chain
+        )
+        return _frame_lookup(chain)
+
+    shared_object = getattr(market_data_loader, "shared_object", None)
+    if callable(shared_object) and sources:
+        return shared_object(
+            sources,
+            (
+                "r6-chain-daily-quote-index-v1",
+                str(market_data.resolve()),
+                day_iso,
+                partitioned_chain is not None,
+            ),
+            build,
+        )
+    return build()
+
+
+def _summary_lookup(day_summary: pd.DataFrame) -> SummaryLookup:
+    # _run_day receives this frame in timestamp order. Keeping that stable order
+    # preserves the historical "last duplicate wins" behavior.
+    frame = day_summary.reset_index(drop=True)
+    return SummaryLookup(frame, pd.DatetimeIndex(frame["ts"]))
 
 
 def _quotes_at(
-    lookup: dict[pd.Timestamp, pd.DataFrame],
+    lookup: QuoteLookup,
     timestamp: pd.Timestamp,
-) -> pd.DataFrame | None:
+) -> QuoteBook | None:
     timestamp = pd.Timestamp(timestamp)
-    exact = lookup.get(timestamp)
+    exact = lookup.by_timestamp.get(timestamp)
     if exact is not None:
         return exact
-    earlier = [key for key in lookup if key <= timestamp]
-    if not earlier:
+    position = bisect_right(lookup.timestamps, timestamp)
+    if position == 0:
         return None
-    nearest = max(earlier)
+    nearest = lookup.timestamps[position - 1]
     if timestamp - nearest > pd.Timedelta(minutes=2):
         return None
-    return lookup[nearest]
+    return lookup.by_timestamp[nearest]
 
 
-def _summary_row_at_or_before(day_summary: pd.DataFrame, timestamp: pd.Timestamp) -> pd.Series | None:
-    rows = day_summary[day_summary["ts"] <= timestamp]
-    if rows.empty:
+def _summary_row_at_or_before(summary: SummaryLookup, timestamp: pd.Timestamp) -> pd.Series | None:
+    position = summary.timestamps.searchsorted(pd.Timestamp(timestamp), side="right")
+    if position == 0:
         return None
-    return rows.iloc[-1]
+    return summary.frame.iloc[position - 1]
 
 
 def _direction_at(
-    day_summary: pd.DataFrame,
+    summary: SummaryLookup,
     timestamp: pd.Timestamp,
     r6_reversal_threshold_pct: float,
 ) -> str | None:
-    current = _summary_row_at_or_before(day_summary, timestamp)
-    d2_reference = _summary_row_at_or_before(day_summary, timestamp - pd.Timedelta(minutes=3))
-    r6_reference = _summary_row_at_or_before(day_summary, timestamp - pd.Timedelta(minutes=5))
+    current = _summary_row_at_or_before(summary, timestamp)
+    d2_reference = _summary_row_at_or_before(summary, timestamp - pd.Timedelta(minutes=3))
+    r6_reference = _summary_row_at_or_before(summary, timestamp - pd.Timedelta(minutes=5))
     if current is None or d2_reference is None or r6_reference is None:
         return None
 
@@ -410,17 +493,18 @@ def _direction_at(
     return direction
 
 
-def _price_for_leg(quotes: pd.DataFrame, strike: int, option_type: str) -> float | None:
-    column = "ce_close" if option_type == "CE" else "pe_close"
-    rows = quotes[quotes["strike"].astype(int) == int(strike)]
-    if rows.empty:
+def _price_for_leg(quotes: QuoteBook, strike: int, option_type: str) -> float | None:
+    try:
+        index = quotes.first_index_by_strike[int(strike)]
+    except KeyError:
         return None
-    value = rows.iloc[0][column]
+    prices = quotes.ce_close if option_type == "CE" else quotes.pe_close
+    value = prices[index]
     return float(value) if _positive_price(value) else None
 
 
 def _select_short_leg(
-    quotes: pd.DataFrame,
+    quotes: QuoteBook,
     direction: str,
     atm_strike: int,
     straddle_premium: float,
@@ -432,31 +516,35 @@ def _select_short_leg(
 
     if direction == "call":
         option_type = "CE"
-        column = "ce_close"
-        candidates = quotes[
-            (quotes["strike"].astype(float) >= float(atm_strike))
-            & quotes[column].map(_positive_price)
-        ].copy()
-        sort_ascending = [True, True]
+        prices = quotes.ce_close
+        candidate_indexes = np.flatnonzero(
+            (quotes.strikes >= int(atm_strike)) & (prices > 0)
+        )
+        strike_order = 1
     elif direction == "put":
         option_type = "PE"
-        column = "pe_close"
-        candidates = quotes[
-            (quotes["strike"].astype(float) <= float(atm_strike))
-            & quotes[column].map(_positive_price)
-        ].copy()
-        sort_ascending = [True, False]
+        prices = quotes.pe_close
+        candidate_indexes = np.flatnonzero(
+            (quotes.strikes <= int(atm_strike)) & (prices > 0)
+        )
+        strike_order = -1
     else:
         raise ValueError(f"Unsupported direction: {direction!r}")
 
-    if candidates.empty:
+    if not len(candidate_indexes):
         raise ValueError(f"No valid {option_type} candidates for target premium {target:.2f}")
-    candidates["distance_to_target"] = (candidates[column].astype(float) - target).abs()
-    selected = candidates.sort_values(
-        ["distance_to_target", "strike"],
-        ascending=sort_ascending,
-    ).iloc[0]
-    return option_type, int(selected["strike"]), float(selected[column])
+    selected_index = min(
+        candidate_indexes,
+        key=lambda index: (
+            abs(float(prices[index]) - target),
+            strike_order * int(quotes.strikes[index]),
+        ),
+    )
+    return (
+        option_type,
+        int(quotes.strikes[selected_index]),
+        float(prices[selected_index]),
+    )
 
 
 def _open_slot(
@@ -464,7 +552,7 @@ def _open_slot(
     slot_id: int,
     reentry_index: int,
     timestamp: pd.Timestamp,
-    quotes: pd.DataFrame,
+    quotes: QuoteBook,
     direction: str,
     atm_strike: int,
     straddle_premium: float,
@@ -542,7 +630,7 @@ def _snapshot(
     timestamp: pd.Timestamp,
     realized_points: float,
     open_slots: list[Slot],
-    quotes: pd.DataFrame | None,
+    quotes: QuoteBook | None,
     lot_size: int,
     slippage: float,
 ) -> None:
@@ -567,7 +655,7 @@ def _run_day(
     *,
     run_id: str,
     day_summary: pd.DataFrame,
-    chain_lookup: dict[pd.Timestamp, pd.DataFrame],
+    chain_lookup: QuoteLookup,
     parameters: Mapping[str, Any],
     starting_slot_id: int,
     starting_trade_sequence: int,
@@ -599,6 +687,7 @@ def _run_day(
     realized_points = starting_realized_points
     last_entry_straddle: float | None = None
     used_reentries_by_slot: dict[int, int] = {}
+    summary_lookup = _summary_lookup(day_summary)
 
     tradable = day_summary[
         (day_summary["DTE"] == 0) & (day_summary["ts"].dt.time >= entry_time)
@@ -684,7 +773,7 @@ def _run_day(
                 continue
             if (len(open_slots) + 1) * margin_per_lot > capital:
                 continue
-            direction = _direction_at(day_summary, timestamp, r6_reversal_threshold_pct)
+            direction = _direction_at(summary_lookup, timestamp, r6_reversal_threshold_pct)
             if direction is None:
                 pending_reentries.append(reentry)
                 continue
@@ -722,7 +811,7 @@ def _run_day(
             and len(open_slots) < max_lots
             and (len(open_slots) + 1) * margin_per_lot <= capital
         ):
-            direction = _direction_at(day_summary, timestamp, r6_reversal_threshold_pct)
+            direction = _direction_at(summary_lookup, timestamp, r6_reversal_threshold_pct)
             if direction is not None:
                 slot = _open_slot(
                     slot_id=next_slot_id,
@@ -826,10 +915,9 @@ def run_strategy(context: StrategyContext) -> dict[str, Any]:
         day_summary = day_summary.sort_values("ts").reset_index(drop=True)
         if callable(report_progress):
             report_progress(day_index, len(trading_days), "trading day", "Running backtest")
-        day_chain = _load_chain_for_day(
+        lookup = _load_chain_lookup(
             market_data, day, market_data_loader, partitioned_chain
         )
-        lookup = _frame_lookup(day_chain)
         day_rows, day_snapshots, next_slot_id, trade_sequence, cumulative_realized_points = _run_day(
             run_id=run_id,
             day_summary=day_summary,

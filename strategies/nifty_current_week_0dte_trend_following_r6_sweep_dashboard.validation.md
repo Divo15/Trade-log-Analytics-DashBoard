@@ -26,6 +26,17 @@ updated local dashboard and select **Weekly · current expiry**.
 - Builds a worker-temporary Hive-style `trade_date=YYYY-MM-DD` cache with typed
   `trade_date` and `ts` columns. Daily reads target one partition and avoid
   repeatedly scanning the source glob or parsing timestamp strings.
+- Builds sorted quote-timestamp and futures-timestamp indexes once per trading
+  day. Nearest prior quotes and futures reference rows use binary search instead
+  of repeatedly filtering the day's DataFrames.
+- Builds a first-row strike index once for every quote timestamp. Open-position
+  valuation and exit checks use direct strike access without repeated type
+  conversion or DataFrame filtering; duplicate strikes preserve the former
+  first-row behavior.
+- Stores each prepared daily quote index in the worker-owned shared disk cache.
+  The first sweep combination builds it; later combinations load the compact
+  immutable index without rereading or regrouping the daily DataFrame. Source
+  path, size and modification time changes invalidate the entry.
 - Counts the partitioned dataset against the existing 2 GiB cache limit and
   deletes it automatically when the worker exits. If it exceeds the limit, the
   strategy falls back to the original source query.
@@ -65,6 +76,24 @@ Completed validation (`outputs/r6_compatibility_check_v2`):
 
 These checks cover bounded samples, not the complete historical dataset.
 
+Indexed-lookup validation on 17 September 2026:
+
+- The pre-index and indexed engines matched exactly on 5 January 2023: 12 raw
+  completed legs and 374 observed equity snapshots.
+- Regression tests cover exact and nearest-prior quote timestamps, the two-minute
+  staleness limit, duplicate strikes, duplicate futures timestamps, and CE/PE
+  strike-selection tie breaks.
+- The focused cache, event-equivalence, strategy-contract and indexed-lookup
+  suites passed all 18 tests.
+- Compact-cache parity across ten completed real expiry days matched 184 raw
+  trades and 3,738 equity snapshots exactly; two additional days produced the
+  same explicit missing-mark failure before and after the change.
+- The sampled prepared index averaged 0.720 MiB per day, projecting to about
+  547 MiB for 760 days within the existing 2 GiB shared disk budget.
+- Preparing a sampled daily index averaged 0.0305 seconds; loading the cached
+  index averaged 0.0035 seconds, an 88.6% reduction for that preparation phase
+  after the first combination.
+
 Run from the repository using its Python environment:
 
 ```powershell
@@ -80,7 +109,6 @@ failure, compares two complete real expiry days when `--market-data` is supplied
 then executes all 144 combinations through the actual dashboard worker on the
 synthetic Parquet dataset. It does not perform a full historical sweep.
 
-The strategy's loading order and pandas trading engine remain unchanged. All
-144 simulations still run; only deterministic prepared frames are reused. Missing
-contract quotes may now expose a data problem which the previous snapshot
-overwrite concealed.
+All 144 simulations still run. Market-data preparation is reused, and repeated
+timestamp and strike searches now use immutable per-day indexes. Missing contract
+quotes may expose a data problem which the previous snapshot overwrite concealed.

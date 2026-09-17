@@ -111,3 +111,32 @@ class SharedCacheTests(unittest.TestCase):
                     (destination / "part.parquet").write_bytes(b"too large")
                 self.assertIsNone(loader.partitioned_dataset([source], "large", build))
                 self.assertEqual(loader.disk_bytes, 0)
+
+    def test_shared_object_reuse_invalidation_budget_and_cleanup(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "source.bin"
+            source.write_bytes(b"one")
+            with MarketDataLoader(directory=root, disk_limit=1024) as loader:
+                cache_folder = Path(loader._temporary.name)
+                build = Mock(return_value=("immutable", 1, 2, 3))
+                first = loader.shared_object([source], "index-v1", build)
+                second = loader.shared_object([source], "index-v1", build)
+                self.assertEqual(first, second)
+                self.assertEqual(build.call_count, 1)
+                self.assertEqual(loader.stats["shared_misses"], 1)
+                self.assertEqual(loader.stats["shared_hits"], 1)
+                self.assertLessEqual(loader.disk_bytes, loader.disk_limit)
+
+                source.write_bytes(b"changed source")
+                loader.shared_object([source], "index-v1", build)
+                self.assertEqual(build.call_count, 2)
+                self.assertEqual(loader.stats["shared_misses"], 2)
+            self.assertFalse(cache_folder.exists())
+
+        with MarketDataLoader(disk_limit=1) as loader:
+            build = Mock(return_value=("too large",) * 100)
+            loader.shared_object([], "oversized", build)
+            loader.shared_object([], "oversized", build)
+            self.assertEqual(build.call_count, 2)
+            self.assertEqual(loader.disk_bytes, 0)
