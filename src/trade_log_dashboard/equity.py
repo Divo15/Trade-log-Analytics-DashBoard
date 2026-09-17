@@ -26,7 +26,14 @@ def analyze_equity(equity_path, trade_path):
                    * Decimal(row["quantity"]) * Decimal(row["multiplier"])
                    - Decimal(row["fees"]) for row in trades)
     if abs(snapshots[-1]["realized_pnl"] - expected) > Decimal("0.01"):
-        raise TradeLogError("Final realized equity P&L does not reconcile with trades and fees (tolerance 0.01)")
+        actual = snapshots[-1]["realized_pnl"]
+        raise TradeLogError(
+            "Final realized equity P&L does not reconcile with trades and fees "
+            f"(tolerance 0.01): expected={expected}, supplied={actual}, "
+            f"difference={actual - expected}. Check cumulative realized P&L across "
+            "sessions, LONG/SHORT signs, quantities, multipliers, fees, and fill prices. "
+            "Do not overwrite the final snapshot to hide a bookkeeping error."
+        )
     if snapshots[-1]["unrealized_pnl"] != 0:
         raise TradeLogError("Final unrealized P&L must be zero: this report requires a fully closed run")
     peak = Decimal(0)

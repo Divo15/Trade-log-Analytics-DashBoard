@@ -7,6 +7,7 @@ import os
 import tempfile
 
 from .core import TradeLogError
+from collections.abc import Mapping
 
 EQUITY_COLUMNS = ("schema_version", "run_id", "timestamp", "realized_pnl", "unrealized_pnl")
 
@@ -55,7 +56,17 @@ def read_equity_csv(path):
 
 def export_equity_snapshots(snapshots, output_path, *, run_id):
     """Export engine snapshots with cumulative realized net P&L and open P&L."""
-    rows = [dict(row, schema_version="1", run_id=run_id) for row in snapshots]
+    if callable(getattr(snapshots, "iterrows", None)):
+        snapshots = (row.to_dict() for _, row in snapshots.iterrows())
+    rows = []
+    for index, row in enumerate(snapshots, 1):
+        if not isinstance(row, Mapping):
+            raise TradeLogError(f"Equity snapshot {index}: expected a mapping of snapshot fields")
+        if "run_id" in row and str(row["run_id"]) != str(run_id):
+            raise TradeLogError(f"Equity snapshot {index}: run_id does not match the current run")
+        if "schema_version" in row and str(row["schema_version"]) != "1":
+            raise TradeLogError(f"Equity snapshot {index}: expected equity schema v1")
+        rows.append(dict(row, schema_version="1", run_id=run_id))
     validate_equity_rows(rows)
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)

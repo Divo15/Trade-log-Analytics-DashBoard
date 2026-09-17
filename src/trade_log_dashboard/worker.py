@@ -7,6 +7,7 @@ import shutil
 import sys
 import traceback
 import time
+from numbers import Integral
 from types import SimpleNamespace
 from trade_log_dashboard.market_data import MarketDataLoader
 from collections.abc import Mapping, Sequence
@@ -27,14 +28,19 @@ SELECTION_WEIGHTS = {
 }
 
 
-def _write_progress(folder, *, completed, total, current=None):
+def _write_progress(folder, *, completed, total, current=None, mode="sweep",
+                    unit="combination", elapsed_seconds=None, **details):
     payload = {
-        "mode": "sweep",
+        "mode": mode,
         "completed": completed,
         "total": total,
         "current": current,
+        "unit": unit,
         "updated_at": time.time(),
     }
+    if elapsed_seconds is not None:
+        payload["elapsed_seconds"] = max(0.0, float(elapsed_seconds))
+    payload.update(details)
     temporary = folder / f"progress-{uuid4().hex}.tmp"
     temporary.write_text(json.dumps(payload, allow_nan=False), encoding="utf-8")
     try:
@@ -51,14 +57,14 @@ def _write_progress(folder, *, completed, total, current=None):
 
 
 def _validate_result(result):
-    if not isinstance(result, dict):
+    if not isinstance(result, Mapping):
         raise ValueError("run_strategy must return completed_trades and completed_trade_count in a mapping.")
     if "completed_trades" not in result:
         raise ValueError("run_strategy result must contain completed_trades.")
     count = result.get("completed_trade_count")
-    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+    if isinstance(count, bool) or not isinstance(count, Integral) or count < 0:
         raise ValueError("completed_trade_count must be a nonnegative integer.")
-    return count
+    return int(count)
 
 
 def _execute_result(result, context, output_folder, dataset):
@@ -228,8 +234,15 @@ def _run_sweep(module, base_context, folder, dataset, execute=None):
         parameters.append(normalized)
 
     summaries = []
-    _write_progress(folder, completed=0, total=len(parameters), current=1)
+    sweep_started = time.perf_counter()
+    combination_durations = []
+    _write_progress(
+        folder, completed=0, total=len(parameters), current=1,
+        combination_elapsed_seconds=0.0,
+        completed_combination_seconds=combination_durations,
+    )
     for index, parameter_set in enumerate(parameters):
+        combination_started = time.perf_counter()
         print(f"Sweep {index + 1}/{len(parameters)} · parameters {json.dumps(parameter_set, sort_keys=True)}", flush=True)
         config = copy.deepcopy(base_context.config)
         config["parameters"] = parameter_set
@@ -239,6 +252,21 @@ def _run_sweep(module, base_context, folder, dataset, execute=None):
             market_data_loader=getattr(base_context, "market_data_loader", None),
             config=config,
         )
+        def report_current(completed, total, unit="item", phase=None):
+            _write_progress(
+                folder,
+                completed=index,
+                total=len(parameters),
+                current=index + 1,
+                combination_completed=completed,
+                combination_total=total,
+                combination_unit=unit,
+                combination_phase=phase,
+                combination_elapsed_seconds=time.perf_counter() - combination_started,
+                completed_combination_seconds=combination_durations,
+                elapsed_seconds=time.perf_counter() - sweep_started,
+            )
+        context.report_progress = report_current
         iteration_folder = folder / "iterations" / str(index)
         try:
             result = execute(context) if execute else module.run_strategy(context)
@@ -257,11 +285,15 @@ def _run_sweep(module, base_context, folder, dataset, execute=None):
             summary = _summary(index, parameter_set, detail)
         _compact_iteration(iteration_folder, summary)
         summaries.append(summary)
+        combination_durations.append(time.perf_counter() - combination_started)
         _write_progress(
             folder,
             completed=index + 1,
             total=len(parameters),
             current=index + 2 if index + 1 < len(parameters) else None,
+            combination_elapsed_seconds=0.0,
+            completed_combination_seconds=combination_durations,
+            elapsed_seconds=time.perf_counter() - sweep_started,
         )
     recommended_index = _rank_sweep(summaries)
     return {
@@ -313,6 +345,20 @@ def _run(folder, loader):
             return
         if mode != "single":
             raise ValueError("RUN_MODE must be 'single' or 'sweep'.")
+        progress_state = {"phase": None, "started": time.perf_counter()}
+        def report_single_progress(completed, total, unit="item", phase=None):
+            if phase != progress_state["phase"]:
+                progress_state.update(phase=phase, started=time.perf_counter())
+            _write_progress(
+                folder,
+                completed=completed,
+                total=total,
+                mode="single",
+                unit=unit,
+                elapsed_seconds=time.perf_counter() - progress_state["started"],
+                phase=phase,
+            )
+        context.report_progress = report_single_progress
         result = module.run_strategy(context)
     elif supports_protected_straddle(module):
         print("Recognized standalone ProtectedStraddleBacktester; applying the project-data adapter…", flush=True)

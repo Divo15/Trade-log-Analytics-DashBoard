@@ -49,6 +49,9 @@
           </div>
         </div>
       </form>
+      <div id="backtestTimer" class="backtest-timer" role="timer" aria-live="off" hidden>
+        <span>Backtest time</span><strong id="backtestTimerValue">00:00:00</strong>
+      </div>
       <p id="runStatus" class="equity-note" role="status" aria-live="polite"></p>
       <details id="runLogPanel" class="run-log" hidden><summary>Run log</summary><pre id="runLog"></pre></details>
     </section>
@@ -71,7 +74,7 @@
     </section>
     <section class="panel history-panel" id="historyPanel" hidden aria-labelledby="historyTitle">
       <div class="panel-heading">
-        <div><h1 id="historyTitle" tabindex="-1">Best strategy history</h1><p>One automatically recommended result is saved from each completed sweep.</p></div>
+        <div><h1 id="historyTitle" tabindex="-1">Best strategy history</h1><p>A recommended result is saved when you choose to run its full analytics.</p></div>
         <span class="count-badge" id="historyCount">—</span>
       </div>
       <p class="sweep-note" id="historyStatus" role="status" aria-live="polite"></p>
@@ -85,7 +88,7 @@
     <div id="runDownloads" class="run-downloads" hidden></div>
     <section class="panel sweep-panel" id="sweepPanel" hidden aria-labelledby="sweepTitle">
       <div class="panel-heading sweep-heading">
-        <div><h1 id="sweepTitle" tabindex="-1">Sweep comparison</h1><p id="sweepDescription">Each row is an independent backtest against the same dataset and dates. The recommended result opens automatically.</p></div>
+        <div><h1 id="sweepTitle" tabindex="-1">Sweep comparison</h1><p id="sweepDescription">Each row is an independent backtest against the same dataset and dates. Review the results before choosing a full analytics run.</p></div>
         <div class="sweep-heading-actions"><span class="count-badge" id="sweepCount">—</span><button class="primary-button" id="viewSelectedSweep" type="button" disabled>Run selected &amp; view analytics</button></div>
       </div>
       <div class="sweep-note" id="sweepNote">Recommended score: 35% P&amp;L, 35% lower drawdown, 15% average win/loss ratio, 10% win rate, and 5% fewer consecutive losses. You can override the recommendation.</div>
@@ -139,7 +142,7 @@
       </div>
 
       <nav class="report-nav" aria-label="Report sections">
-        <a href="#performance">Performance</a><a href="#intraday">Intraday risk</a><a href="#consistency">Consistency</a><a href="#monthly">Monthly</a><a href="#batches">Batches</a>
+        <a href="#performance">Performance</a><a href="#intraday">Intraday risk</a><a href="#consistency">Consistency</a><a href="#yearly">Yearly</a><a href="#monthly">Monthly</a><a href="#batches">Batches</a>
         <span>Amounts in INR</span>
       </nav>
 
@@ -226,6 +229,19 @@
               <div><dt>Net without best and worst</dt><dd id="netWithoutBestWorst">—</dd></div>
             </dl>
           </div>
+        </div>
+      </section>
+
+      <section class="panel yearly-panel" id="yearly" aria-labelledby="yearlyTitle">
+        <div class="panel-heading">
+          <div><h2 id="yearlyTitle">Year-on-year P&amp;L</h2><p>Net P&amp;L and closed-trade drawdown by exit year · ROI on ₹12 lakh capital</p></div>
+        </div>
+        <div class="chart-shell monthly-chart" id="yearlyChart" role="img" aria-label="Year-on-year P and L bar chart"></div>
+        <div class="table-scroll yearly-table-scroll" tabindex="0" role="region" aria-label="Year-on-year performance data">
+          <table>
+            <thead><tr><th>Year</th><th class="numeric">Net P&amp;L</th><th class="numeric">Best day</th><th class="numeric">Yearly drawdown</th><th class="numeric">ROI</th><th class="numeric">Losing days</th><th class="numeric">Traded days</th></tr></thead>
+            <tbody id="yearlyRows"></tbody>
+          </table>
         </div>
       </section>
 

@@ -98,22 +98,26 @@ def run_strategy(context):
 class LocalRunnerTests(unittest.TestCase):
     def test_selected_dataset_is_the_actual_worker_input(self):
         from trade_log_dashboard.datasets import DATASETS, catalog
-        for identifier, price in [("weekly", 110), ("next-weekly", 125), ("monthly", 90)]:
-            folder = self.market / DATASETS[identifier][1]
-            (folder / "nifty_chain").mkdir(parents=True)
-            (folder / "nifty_summary.parquet").touch()
-            (folder / "nifty_chain" / "part.parquet").touch()
+        cases = [("weekly", 110, 10), ("next-weekly", 125, 25),
+                 ("monthly", 90, -10), ("sensex-weekly", 140, 40)]
+        for identifier, price, _ in cases:
+            definition = DATASETS[identifier]
+            folder = self.market / definition["folder"]
+            (folder / definition["chain"]).mkdir(parents=True)
+            (folder / definition["summary"]).touch()
+            (folder / definition["chain"] / "part.parquet").touch()
             (folder / "prices.csv").write_text(f"time,price\n2026-01-01T10:00:00+00:00,100\n2026-01-01T11:00:00+00:00,{price}\n")
         with patch("trade_log_dashboard.datasets.DATA_ROOT", self.market), \
              patch("trade_log_dashboard.datasets._coverage", return_value=("2026-01-01", "2026-01-02", 2)):
             self.assertFalse(next(row for row in catalog() if row["id"] == "next2week")["available"])
-            for identifier, expected in [("weekly", 10), ("next-weekly", 25), ("monthly", -10)]:
+            for identifier, _, expected in cases:
                 job = self.runner.start(dict(entrypoint="strategy.py", dataset_id=identifier, config="{}"),
                                         [("strategy", "strategy.py", STRATEGY.encode())])
                 request = json.loads((self.runner.jobs[job]["folder"] / "request.json").read_text())
                 self.assertEqual(request["config"]["period"], {
                     "start_date": "2026-01-01", "end_date": "2026-01-02"
                 })
+                self.assertEqual(request["config"]["instrument"]["symbol"], DATASETS[identifier]["symbol"])
                 result = self.finish(job)
                 self.assertEqual(result["status"], "succeeded", result)
                 analysis = result["result"]["analysis"]
@@ -157,6 +161,26 @@ class LocalRunnerTests(unittest.TestCase):
         result = self.finish(self.start(STRATEGY.replace("range(1, len(prices))", "range(0)")))
         self.assertEqual(result["status"], "empty", result)
 
+    def test_single_run_reports_work_progress_and_eta(self):
+        source = '''
+STRATEGY_CONTRACT_VERSION = "2"
+RUN_MODE = "single"
+def run_strategy(context):
+    context.report_progress(0, 4, "trading day", "Preparing trading days")
+    context.report_progress(2, 4, "trading day", "Preparing trading days")
+    return {"completed_trades": [], "completed_trade_count": 0}
+'''
+        result = self.finish(self.start(source))
+        progress = result["progress"]
+        self.assertEqual(progress["mode"], "single")
+        self.assertEqual(progress["completed"], 2)
+        self.assertEqual(progress["total"], 4)
+        self.assertEqual(progress["unit"], "trading day")
+        self.assertEqual(progress["phase"], "Preparing trading days")
+        self.assertEqual(progress["percentage"], 50.0)
+        self.assertIsNotNone(progress["average_per_second"])
+        self.assertIsNotNone(progress["estimated_remaining_seconds"])
+
     def test_missing_dependency_is_actionable(self):
         result = self.finish(self.start("import nonexistent_backtest_dependency_123"))
         self.assertEqual(result["status"], "failed")
@@ -167,7 +191,13 @@ class LocalRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already running"):
             self.start()
         self.runner.cancel(identifier)
-        self.assertEqual(self.runner.status(identifier)["status"], "cancelled")
+        cancelled = self.runner.status(identifier)
+        self.assertEqual(cancelled["status"], "cancelled")
+        with patch("trade_log_dashboard.runner.time.monotonic", return_value=10**9):
+            self.assertEqual(
+                self.runner.status(identifier)["elapsed_seconds"],
+                cancelled["elapsed_seconds"],
+            )
 
     def test_archive_traversal_rejected(self):
         archive = self.market / "bad.zip"
@@ -345,6 +375,36 @@ def run_strategy(context):
         sweep = result["result"]["sweep"]
         self.assertEqual(sweep["iteration_count"], 501)
         self.assertEqual(sweep["no_trade_count"], 501)
+
+    def test_sweep_exposes_current_combination_progress_and_rolling_eta(self):
+        source = '''
+import time
+STRATEGY_CONTRACT_VERSION = "2"
+RUN_MODE = "sweep"
+SWEEP_PARAMETER_SETS = ({"value": 1}, {"value": 2})
+def run_strategy(context):
+    context.report_progress(2, 4, "trading day")
+    time.sleep(.5)
+    return {"completed_trades": [], "completed_trade_count": 0}
+'''
+        identifier = self.start(source)
+        observed = None
+        deadline = time.time() + 3
+        while time.time() < deadline:
+            progress = self.runner.status(identifier)["progress"]
+            if progress and progress.get("combination_completed") == 2:
+                observed = progress
+                break
+            time.sleep(.02)
+        self.assertIsNotNone(observed)
+        self.assertEqual(observed["mode"], "sweep")
+        self.assertEqual(observed["current"], 1)
+        self.assertEqual(observed["current_percentage"], 50.0)
+        self.assertIsNotNone(observed["current_estimated_remaining_seconds"])
+        result = self.finish(identifier)
+        self.assertEqual(result["status"], "succeeded", result)
+        self.assertIsNotNone(result["progress"]["average_combination_seconds"])
+        self.assertEqual(result["progress"]["estimated_remaining_seconds"], 0)
 
     def test_failed_sweep_variation_does_not_stop_later_combinations(self):
         source = '''

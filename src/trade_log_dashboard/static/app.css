@@ -106,7 +106,9 @@ main { width: min(1320px, calc(100% - 64px)); margin: 0 auto; }
 .secondary-button:disabled { opacity: .6; cursor: wait; }
 .chart-legend { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 0; padding: 0 18px 16px; color: var(--muted); font-size: 12px; }
 .single-point { fill: var(--positive); }
-.equity-note { margin: 12px 18px 18px; max-width: 75ch; color: var(--muted); overflow-wrap: anywhere; }
+.equity-note { margin: 12px 18px 18px; max-width: 75ch; color: var(--muted); overflow-wrap: anywhere; white-space: pre-line; }
+.backtest-timer { display: flex; align-items: baseline; gap: 10px; margin: 16px 18px 4px; color: var(--muted); }
+.backtest-timer strong { color: var(--ink); font-size: 24px; font-variant-numeric: tabular-nums; letter-spacing: .04em; }
 .calculation-notes { margin-top: 18px; padding: 16px 18px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .calculation-notes summary { cursor: pointer; font-weight: 650; }
 .calculation-notes li { max-width: 75ch; margin: 10px 0; color: var(--muted); }
@@ -151,7 +153,7 @@ main { width: min(1320px, calc(100% - 64px)); margin: 0 auto; }
 .metric-ledger div:nth-last-child(-n+2) { border-bottom: 0; }
 .metric-ledger strong { display: block; margin-top: 5px; font-size: 1.05rem; font-variant-numeric: tabular-nums; }
 
-.diagnostic-panel, .monthly-panel, .table-panel { margin-top: 14px; }
+.diagnostic-panel, .yearly-panel, .monthly-panel, .table-panel { margin-top: 14px; }
 .diagnostic-grid { display: grid; grid-template-columns: 1.45fr 0.75fr; border-top: 1px solid var(--line); }
 .diagnostic-group { min-width: 0; padding: 17px 18px 19px; }
 .diagnostic-group + .diagnostic-group { border-left: 1px solid var(--line); }
@@ -174,6 +176,7 @@ main { width: min(1320px, calc(100% - 64px)); margin: 0 auto; }
 .count-badge { padding: 4px 9px; color: var(--ink); background: var(--surface-muted); }
 .table-scroll { max-height: 520px; overflow: auto; }
 .monthly-table-scroll { max-height: 310px; border-top: 1px solid var(--line); }
+.yearly-table-scroll { border-top: 1px solid var(--line); }
 table { width: 100%; border-collapse: collapse; white-space: nowrap; font-size: 12px; }
 th { position: sticky; top: 0; z-index: 1; padding: 10px 18px; background: var(--surface-muted); color: var(--muted); font-size: 10px; text-align: left; }
 td { padding: 11px 18px; border-top: 1px solid var(--line); font-variant-numeric: tabular-nums; }
@@ -223,7 +226,7 @@ input, select { font: inherit; }
 .panel-heading h2 { font-size: 1rem; }
 .panel-heading p { font-size: 12px; margin-top: 5px; }
 .panel-heading button { flex-shrink: 0; }
-.diagnostic-panel, .monthly-panel, .table-panel { margin-top: 24px; }
+.diagnostic-panel, .yearly-panel, .monthly-panel, .table-panel { margin-top: 24px; }
 .chart-legend span::before { content: ''; display: inline-block; width: 16px; height: 3px; margin: 0 7px 3px 0; background: var(--positive); }
 .chart-legend span + span::before { height: 8px; margin-bottom: 0; background: var(--negative-pale); border: 1px solid var(--negative); }
 .diagnostic-group { padding: 22px; }

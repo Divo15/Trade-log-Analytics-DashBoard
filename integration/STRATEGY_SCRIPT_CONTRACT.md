@@ -214,19 +214,66 @@ if len(completed_trade_rows) != authoritative_count:
     raise ValueError("completed-trade row normalization changed the engine count")
 ```
 
-Return `completed_trade_rows` as `completed_trades` and
-`authoritative_count` as `completed_trade_count`. Do not return a pandas
-`DataFrame` directly: normal DataFrame iteration yields column names. This
-row normalization is a transport conversion of the authoritative engine table;
-it is not permission to infer or reconstruct trades. The exporter also handles
-DataFrame-like objects defensively, but generated scripts must still make the
-row boundary explicit.
+Returning `completed_trade_rows` with `authoritative_count` is portable across
+runners. The local worker also accepts canonical pandas DataFrames directly,
+with or without a custom trade mapper. A custom mapper receives each Series row;
+without a mapper, canonical columns are converted to mappings without changing
+values. Lists and generators of canonical mappings remain supported. This
+conversion does not infer or reconstruct trades. Noncanonical engine objects
+still need an explicit mapper; the backend does not guess field meanings.
 
 ### `completed_trade_count`
 
 This must be the authoritative engine count for the same collection. The
 trusted notebook passes it to `export_trade_log(..., expected_count=...)`. A count
-mismatch fails the run.
+mismatch fails the run. The local worker accepts Python and NumPy integer
+counts, but rejects booleans, fractional counts and numeric strings. The result
+may be any mapping, including a read-only mapping.
+
+### Optional equity snapshots
+
+The local worker accepts lists, generators of mappings, and pandas DataFrames
+with `timestamp`, `realized_pnl`, and `unrealized_pnl` columns. If `run_id` or
+`schema_version` columns are included, they must match the current run and
+equity schema v1. See [the equity contract](EQUITY_SNAPSHOT_CONTRACT.md).
+Snapshots must contain genuine observations with cumulative net realised P&L
+across the whole run. LONG and SHORT legs, quantities, multipliers and fees
+must reconcile with the trade export. Invalid snapshots still fail validation;
+the worker reports expected, supplied and difference values for endpoint
+mismatches. It does not silently repair day resets or replace an endpoint.
+Strategies without observed equity may omit snapshots; trade analytics still
+work, while intraday drawdown is unavailable.
+
+### Progress callbacks
+
+Both single and sweep runs accept
+`context.report_progress(completed, total, unit="item", phase=None)`.
+Reporting is optional; it does not alter trades. Report meaningful work units
+such as days or files. A phase label describes the current stage; a preparation
+stage estimate is not a guarantee of the entire backtest finish time.
+
+### Validate before a long run
+
+Run a strategy through the actual local worker against a representative sample
+dataset using:
+
+```powershell
+.venv\Scripts\python.exe -m trade_log_dashboard.validate_strategy strategies\my_strategy.py --market-data data\sample --output outputs\my_strategy_check --timeout 120
+```
+
+The sample must have the same schema and contain all history needed by the
+strategy, including signal days and execution days. The command does not change
+rules, date filters, or sweep parameter sets and does not select a sample for
+you. It runs every declared sweep combination with an overall deadline. Use
+`--config config.json` when configuration is needed and choose a new output
+folder for each check. It does not use or interrupt the dashboard server.
+
+The output contains `validation.json`, logs and available worker artifacts,
+including exported trades when equity reconciliation fails. Any failed or
+empty variation, or timeout, returns a nonzero exit code. Passing checks the
+output contract on the supplied sample; it does not prove trading-rule fidelity
+or profitability. Compare against an existing baseline separately when adapting
+an existing strategy.
 
 ### `trade_mapper`
 

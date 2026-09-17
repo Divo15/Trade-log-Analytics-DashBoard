@@ -130,6 +130,10 @@ def export_trade_log(
     for index, raw in enumerate(raw_trades):
         try:
             mapped = mapper(raw, index) if mapper is not None else raw
+            # iterrows yields Series; preserve custom mapper inputs but allow
+            # canonical DataFrame rows without a mapper too.
+            if mapper is None and callable(getattr(mapped, "to_dict", None)):
+                mapped = mapped.to_dict()
             if not isinstance(mapped, (Mapping, TradeRecord)):
                 raise TradeLogError("The mapper must return a mapping or TradeRecord")
             records.append(_to_record(mapped, assume_timezone=assume_timezone))

@@ -1,5 +1,6 @@
 let activeRun = null;
 let pollTimer = null;
+let elapsedTimer = null;
 let projectDatasets = [];
 let datasetLoadPending = false;
 let datasetRetryTimer = null;
@@ -9,6 +10,7 @@ function setDatasetHint(message) {
 }
 let sweepRun = null;
 let selectedSweepIndex = null;
+let recommendedSweepIndex = null;
 const displayDate = new Intl.DateTimeFormat("en-IN", {day:"numeric", month:"short", year:"numeric", timeZone:"UTC"});
 const historyDate = new Intl.DateTimeFormat("en-IN", {day:"numeric", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit"});
 function showDatasetCoverage(dataset) {
@@ -54,7 +56,20 @@ async function loadDatasets() {
 $("datasetSelect").addEventListener("change", () => {
   const selected = $("datasetSelect").value;
   const dataset = projectDatasets.find(row => row.id === selected);
-  setDatasetHint(dataset ? `Uses the project's ${dataset.folder} dataset.` : "Choose the saved dataset to backtest.");
+  setDatasetHint(dataset ? `Uses ${dataset.symbol} data from the ${dataset.folder} folder.` : "Choose the saved dataset to backtest.");
+  if (dataset?.symbol) {
+    try {
+      const config = JSON.parse($("runConfig").value);
+      if (config && !Array.isArray(config) && typeof config === "object") {
+        const instrument = config.instrument && !Array.isArray(config.instrument) && typeof config.instrument === "object"
+          ? config.instrument : {};
+        config.instrument = {...instrument, symbol: dataset.symbol};
+        $("runConfig").value = JSON.stringify(config, null, 2);
+      }
+    } catch (_) {
+      // Preserve invalid user text so submission can show the existing JSON error.
+    }
+  }
   showDatasetCoverage(dataset);
 });
 loadDatasets();
@@ -128,6 +143,7 @@ function showRunner() {
 $("newRunButton").addEventListener("click", () => {
   sweepRun = null;
   selectedSweepIndex = null;
+  recommendedSweepIndex = null;
   showRunner();
 });
 $("backToSweepButton").addEventListener("click", () => {
@@ -239,7 +255,7 @@ async function showHistory() {
     if (!response.ok) throw new Error(result.error || "Best-result history could not be loaded.");
     const rows = result.history || [];
     $("historyCount").textContent = `${number.format(rows.length)} saved`;
-    $("historyStatus").textContent = rows.length ? "Only automatically recommended sweep winners are stored." : "No completed sweep winner has been saved yet.";
+    $("historyStatus").textContent = rows.length ? "Recommended combinations are stored after you run them for full analytics." : "No recommended sweep result has been run and saved yet.";
     $("historyRows").innerHTML = rows.map(record => {
       const metrics = record.metrics || {};
       const drawdown = metrics.intraday_drawdown == null ? metrics.max_drawdown : metrics.intraday_drawdown;
@@ -297,9 +313,10 @@ async function openSweepIteration(index, button, saveBest = false) {
 function renderSweep(sweep, id) {
   sweepRun = id;
   selectedSweepIndex = null;
+  recommendedSweepIndex = sweep.recommended_index;
   $("viewSelectedSweep").disabled = true;
   $("sweepCount").textContent = `${sweep.iteration_count} variations`;
-  $("sweepNote").textContent = `${number.format(sweep.ranked_count || 0)} profitable candidates ranked · ${number.format(sweep.no_trade_count || 0)} without trades · ${number.format(sweep.failed_count || 0)} failed. Score: 35% P&L, 35% lower drawdown, 15% average win/loss ratio, 10% win rate, and 5% fewer consecutive losses. The recommended combination opens automatically; you can return here and override it.`;
+  $("sweepNote").textContent = `${number.format(sweep.ranked_count || 0)} profitable candidates ranked · ${number.format(sweep.no_trade_count || 0)} without trades · ${number.format(sweep.failed_count || 0)} failed. Score: 35% P&L, 35% lower drawdown, 15% average win/loss ratio, 10% win rate, and 5% fewer consecutive losses. Review the comparison, then run a combination only when you want its full analytics.`;
   const parameterKeys = [...new Set(sweep.iterations.flatMap(item => Object.keys(item.parameters || {})))];
   $("sweepHead").innerHTML = `<tr><th>Select</th><th>Rank</th><th>Combination</th>${parameterKeys.map(key => `<th>${escapeHtml(key)}</th>`).join("")}<th class="numeric">Score</th><th class="numeric">Net P&amp;L</th><th class="numeric">Max drawdown</th><th class="numeric">Win rate</th><th class="numeric">Max consecutive losses</th><th class="numeric">Average profit</th><th class="numeric">Average loss</th><th class="numeric">Avg win/loss</th><th class="numeric">Profit factor</th><th class="numeric">Trades</th><th><span class="sr-only">Action</span></th></tr>`;
   const rankedRows = [...sweep.iterations].sort((left, right) =>
@@ -333,7 +350,7 @@ function renderSweep(sweep, id) {
       input.checked = true;
       input.dispatchEvent(new Event("change"));
     }
-    openSweepIteration(index, button);
+    openSweepIteration(index, button, index === sweep.recommended_index);
   }));
   if (sweep.recommended_index !== null && sweep.recommended_index !== undefined) {
     const recommendedInput = document.querySelector(`.sweep-select[value="${sweep.recommended_index}"]`);
@@ -355,7 +372,13 @@ function renderSweep(sweep, id) {
 }
 
 $("viewSelectedSweep").addEventListener("click", () => {
-  if (selectedSweepIndex !== null) openSweepIteration(selectedSweepIndex, $("viewSelectedSweep"));
+  if (selectedSweepIndex !== null) {
+    openSweepIteration(
+      selectedSweepIndex,
+      $("viewSelectedSweep"),
+      selectedSweepIndex === recommendedSweepIndex,
+    );
+  }
 });
 
 function duration(seconds) {
@@ -363,6 +386,43 @@ function duration(seconds) {
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.ceil(seconds / 60)}m`;
   return `${Math.floor(seconds / 3600)}h ${Math.ceil((seconds % 3600) / 60)}m`;
+}
+
+function elapsedTime(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const remainingSeconds = total % 60;
+  return [hours, minutes, remainingSeconds]
+    .map(value => String(value).padStart(2, "0"))
+    .join(":");
+}
+
+function finishTime(secondsRemaining) {
+  if (secondsRemaining == null) return "estimating";
+  const finish = new Date(Date.now() + secondsRemaining * 1000);
+  return finish.toLocaleTimeString([], {hour: "numeric", minute: "2-digit"});
+}
+
+function showBacktestTimer(seconds, running) {
+  clearInterval(elapsedTimer);
+  const timer = $("backtestTimer");
+  const value = $("backtestTimerValue");
+  timer.hidden = false;
+  const baseSeconds = Math.max(0, Math.floor(Number(seconds) || 0));
+  const observedAt = Date.now();
+  const render = () => {
+    const increment = running ? Math.floor((Date.now() - observedAt) / 1000) : 0;
+    value.textContent = elapsedTime(baseSeconds + increment);
+  };
+  render();
+  if (running) elapsedTimer = setInterval(render, 1000);
+}
+
+function stopBacktestTimer(hide = false) {
+  clearInterval(elapsedTimer);
+  elapsedTimer = null;
+  if (hide) $("backtestTimer").hidden = true;
 }
 
 async function pollRun() {
@@ -373,6 +433,7 @@ async function pollRun() {
     const job = await response.json();
     if (!response.ok) {
       if (response.status === 404) {
+        stopBacktestTimer(true);
         activeRun = null;
         sessionStorage.removeItem("activeBacktest");
         busyRun(false);
@@ -383,11 +444,51 @@ async function pollRun() {
     }
     $("runLogPanel").hidden = false;
     $("runLog").textContent = job.log;
+    showBacktestTimer(job.elapsed_seconds, job.status === "running");
     if (job.progress?.mode === "sweep") {
-      const estimate = job.progress.estimated_remaining_seconds == null ? "" : ` · about ${duration(job.progress.estimated_remaining_seconds)} remaining`;
-      $("runStatus").textContent = `Sweep ${job.status} · ${job.progress.completed} of ${job.progress.total} combinations complete · ${duration(job.elapsed_seconds)} elapsed${estimate}`;
+      const progress = job.progress;
+      const current = progress.current;
+      const currentElapsed = Number(progress.combination_elapsed_seconds || 0)
+        + (job.status === "running" ? Math.max(0, Date.now() / 1000 - Number(progress.updated_at || Date.now() / 1000)) : 0);
+      const currentPercent = progress.current_percentage == null
+        ? "preparing current combination"
+        : `${Number(progress.current_percentage).toFixed(1)}% through current combination`;
+      const currentEta = progress.current_estimated_remaining_seconds == null
+        ? "ETA starts after its first completed work unit"
+        : `~${duration(progress.current_estimated_remaining_seconds)} remaining`;
+      const average = progress.average_combination_seconds == null
+        ? "Average per combination: calculating"
+        : `Average per combination: ${duration(progress.average_combination_seconds)}`;
+      const overallEta = progress.estimated_remaining_seconds == null
+        ? "Estimated remaining: calculating"
+        : `Estimated remaining: ${duration(progress.estimated_remaining_seconds)}`;
+      const lines = [
+        `Sweep ${job.status} · ${progress.completed} of ${progress.total} combinations complete`,
+        current ? `Running combination ${current} of ${progress.total} · ${currentPercent}` : "All combinations processed",
+        current ? `Current run: ${elapsedTime(currentElapsed)} elapsed · ${currentEta}` : null,
+        `Overall: ${progress.completed}/${progress.total} complete · ${elapsedTime(job.elapsed_seconds)} elapsed`,
+        average,
+        overallEta,
+        `Estimated finish: ${finishTime(progress.estimated_remaining_seconds)}`,
+      ];
+      $("runStatus").textContent = lines.filter(Boolean).join("\n");
+    } else if (job.progress?.mode === "single") {
+      const completed = job.progress.completed || 0;
+      const total = job.progress.total || 0;
+      const remaining = Math.max(0, total - completed);
+      const unit = job.progress.unit || "item";
+      const plural = total === 1 ? unit : `${unit}s`;
+      const percentage = Number(job.progress.percentage || 0).toFixed(1);
+      const speed = job.progress.average_per_second == null
+        ? "estimating speed"
+        : `${Number(job.progress.average_per_second).toFixed(2)} ${plural}/sec`;
+      const eta = job.progress.estimated_remaining_seconds == null
+        ? "estimating ETA"
+        : `${duration(job.progress.estimated_remaining_seconds)} remaining`;
+      const phase = job.progress.phase ? `${job.progress.phase} · ` : "";
+      $("runStatus").textContent = `Backtest ${job.status} · ${phase}${completed}/${total} ${plural} complete (${percentage}%) · ${remaining} remaining · ${speed} · ${eta} · finishes ${finishTime(job.progress.estimated_remaining_seconds)}`;
     } else {
-      $("runStatus").textContent = `Backtest ${job.status} · ${job.elapsed_seconds} seconds`;
+      $("runStatus").textContent = `Backtest ${job.status} · preparing market data; ETA starts with the first completed trading day`;
     }
     if (job.status === "running") {
       pollTimer = setTimeout(pollRun, 1500);
@@ -395,15 +496,10 @@ async function pollRun() {
     }
     if (job.status === "succeeded") {
       if (job.result.mode === "sweep") {
-        const recommendedIndex = job.result.sweep.recommended_index;
         renderSweep(job.result.sweep, id);
         activeRun = null;
         sessionStorage.removeItem("activeBacktest");
         busyRun(false);
-        if (recommendedIndex !== null && recommendedIndex !== undefined) {
-          $("runStatus").textContent = `Sweep complete. Opening recommended combination ${recommendedIndex + 1}…`;
-          await openSweepIteration(recommendedIndex, null, true);
-        }
         return;
       }
       const tradeResponse = await fetch(`/api/backtests/${id}/trades.csv`);
@@ -439,6 +535,7 @@ async function pollRun() {
     sessionStorage.removeItem("activeBacktest");
     busyRun(false);
   } catch (error) {
+    stopBacktestTimer();
     $("runStatus").textContent = `${error.message} Reconnecting to the local runner…`;
     pollTimer = setTimeout(pollRun, 4000);
   }
@@ -464,6 +561,7 @@ $("runForm").addEventListener("submit", async event => {
     form.append("config", JSON.stringify(config));
     form.append("dataset_id", selectedDataset);
     busyRun(true);
+    showBacktestTimer(0, true);
     $("runStatus").textContent = "Uploading files and starting the local Python process…";
     $("runDownloads").hidden = true;
     $("runLog").textContent = "";
@@ -482,13 +580,22 @@ $("runForm").addEventListener("submit", async event => {
 
 $("cancelRun").addEventListener("click", async () => {
   if (!activeRun) return;
+  stopBacktestTimer();
+  $("runStatus").textContent = "Cancelling backtest…";
   try {
     const response = await fetch(`/api/backtests/${activeRun}/cancel`, {method:"POST", headers:{"X-Local-Runner":"1"}});
     if (!response.ok) throw new Error("Could not cancel the run. Check that the local server is running.");
     clearTimeout(pollTimer);
     await pollRun();
-  } catch (error) { $("runStatus").textContent = error.message; }
+  } catch (error) {
+    $("runStatus").textContent = error.message;
+  }
 });
 
+const linkedRun = location.hash.match(/^#backtest=([a-f0-9]{32})$/)?.[1];
+if (linkedRun) {
+  sessionStorage.setItem("activeBacktest", linkedRun);
+  history.replaceState(null, "", location.pathname);
+}
 const savedRun = sessionStorage.getItem("activeBacktest");
 if (savedRun) { activeRun = savedRun; busyRun(true); pollRun(); }

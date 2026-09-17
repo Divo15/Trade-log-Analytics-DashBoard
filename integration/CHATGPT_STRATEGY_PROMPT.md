@@ -54,7 +54,37 @@ REQUIRED MODULE BOUNDARY
    RUN_MODE selection must not
    simplify, replace, omit, reinterpret, or tune indicators, signals, entries,
    exits, re-entry, sizing, stops, targets, multi-leg behavior, or state.
-11. Use only normal Python imports in the module. List any additional
+11. When modifying or sweeping an existing strategy, treat every baseline
+    constant as locked unless the user explicitly names it as a sweep parameter.
+    This includes active-slot limits, total fresh-slot limits, lot quantity,
+    capital or margin behavior, entry time, expiry filter, premium-selection
+    rule, stop, target, re-entry delay and limit, slippage, fees, and fill model.
+12. A sweep may change only the keys declared in SWEEP_PARAMETER_SETS. Name each
+    key after the rule it actually changes; do not use a strike-selection
+    parameter to imply an entry-trigger change, and do not alter unrelated
+    constants to make a sweep faster.
+13. If capital, margin, or exposure is described as a limit, implement it or
+    state clearly that it is descriptive only. Keep simultaneous active-slot
+    limits distinct from a lifetime cap on fresh slot IDs.
+14. Use context.config execution values when the engine supports them. If fixed
+    slippage, fees, multiplier, timezone, or fill assumptions are required,
+    validate conflicting configuration and fail clearly rather than silently
+    ignoring it.
+15. Use one canonical exit-reason value throughout each stop and re-entry path.
+    A mismatch must never make a stated re-entry rule unreachable.
+16. For a sweep derived from a baseline strategy, verify the combination with
+    baseline parameter values against the baseline on a bounded representative
+    sample. Completed trades and observed equity snapshots must match exactly
+    before claiming parity.
+17. Performance improvements may cache only immutable market-data reads or
+    deterministic prepared frames. Never cache positions, fills, P&L, trades,
+    or equity. Verify cached and uncached results match for every sweep
+    combination on a bounded representative sample.
+18. If reporting losing days or a daily loss streak, aggregate portfolio P&L by
+    chronological evaluated expiry day. A losing day is below zero and a daily
+    streak resets on profitable or zero-P&L evaluated days. Keep this separate
+    from a losing-batch streak.
+19. Use only normal Python imports in the module. List any additional
    Colab-installable packages in source comments; installation belongs in the
    notebook setup cell.
 
@@ -119,6 +149,13 @@ Verify that:
 - DEFAULT_MARKET_DATA_PATH is None unless the user explicitly supplied the
   exact permitted Colab Drive path;
 - every requested strategy rule is preserved;
+- baseline constants are unchanged unless explicitly declared as sweep
+  parameters;
+- a derived sweep's baseline combination exactly matches the baseline strategy
+  on a bounded representative sample;
+- cached and uncached sweep results match on that sample;
+- active-slot, fresh-slot, capital, margin, quantity, cost, and fill behavior
+  are explicit and match the request;
 - the engine API came from the supplied reference;
 - dependencies are available in the selected Colab runtime;
 - no desktop, arbitrary server, or invented path is embedded in the module;

@@ -45,8 +45,8 @@ function lineChart(rows) {
   host.innerHTML = `<svg viewBox="0 0 ${width} ${height}" aria-hidden="true">${grid}<polygon class="drawdown-area" points="${drawdownArea}"/><polygon class="chart-area" points="${areaPoints}"/><polyline class="chart-line" points="${equityPoints}"/>${point}${labels}</svg>`;
 }
 
-function barChart(rows) {
-  const host = $("monthlyChart");
+function barChart(rows, hostId, labelForRow) {
+  const host = $(hostId);
   if (!rows.length) return;
   const width = 920, height = 225, left = 80, right = 24, top = 20, bottom = 40;
   const values = rows.map((row) => Number(row.net_pnl));
@@ -56,17 +56,44 @@ function barChart(rows) {
   const slot = (width - left - right) / rows.length;
   const barWidth = Math.min(46, slot * 0.58);
   const labelEvery = Math.max(1, Math.ceil(rows.length / 12));
+  const labelIndexes = new Set(rows.map((_, index) => index).filter(index => index % labelEvery === 0));
+  const lastIndex = rows.length - 1;
+  const precedingLabel = [...labelIndexes].filter(index => index < lastIndex).at(-1);
+  if (precedingLabel != null && lastIndex - precedingLabel < labelEvery) labelIndexes.delete(precedingLabel);
+  labelIndexes.add(lastIndex);
   const bars = rows.map((row, index) => {
     const value = Number(row.net_pnl), py = y(value), zero = y(0), x = left + slot * index + (slot - barWidth) / 2;
     const rectY = Math.min(py, zero), rectHeight = Math.max(2, Math.abs(zero - py));
-    const label = row.month.slice(5) + "/" + row.month.slice(2, 4);
-    const axisLabel = (index % labelEvery === 0 || index === rows.length - 1)
+    const label = labelForRow(row);
+    const axisLabel = labelIndexes.has(index)
       ? `<text class="axis-label" x="${x+barWidth/2}" y="${height-13}" text-anchor="middle">${label}</text>`
       : "";
-    return `<rect class="${value >= 0 ? "bar-positive" : "bar-negative"}" x="${x}" y="${rectY}" width="${barWidth}" height="${rectHeight}" rx="3"><title>${row.month}: ${money.format(value)}</title></rect>${axisLabel}`;
+    return `<rect class="${value >= 0 ? "bar-positive" : "bar-negative"}" x="${x}" y="${rectY}" width="${barWidth}" height="${rectHeight}" rx="3"><title>${label}: ${money.format(value)}</title></rect>${axisLabel}`;
   }).join("");
   const grid = [min, (min + max) / 2, max].filter((v, i, a) => a.indexOf(v) === i).map(v => `<line class="chart-grid" x1="${left}" x2="${width-right}" y1="${y(v)}" y2="${y(v)}"/><text class="axis-label" x="${left-10}" y="${y(v)+4}" text-anchor="end">${money.format(v)}</text>`).join("");
   host.innerHTML = `<svg viewBox="0 0 ${width} ${height}" aria-hidden="true">${grid}<line class="zero-line" x1="${left}" y1="${y(0)}" x2="${width-right}" y2="${y(0)}"/>${bars}</svg>`;
+  host.setAttribute("aria-label", `${rows.length} periods. Net P&L ranges from ${money.format(min)} to ${money.format(max)}.`);
+}
+
+function yearlyFromDaily(rows) {
+  const capital = 1200000;
+  const grouped = new Map();
+  for (const row of rows) {
+    const year = String(row.day).slice(0, 4);
+    const pnl = Number(row.net_pnl);
+    if (!grouped.has(year)) grouped.set(year, { year, net_pnl: 0, best_day: -Infinity, losing_days: 0, traded_days: 0, equity: 0, peak: 0, max_drawdown: 0 });
+    const result = grouped.get(year);
+    result.net_pnl += pnl;
+    result.best_day = Math.max(result.best_day, pnl);
+    result.losing_days += pnl < 0 ? 1 : 0;
+    result.traded_days += 1;
+    result.equity += pnl;
+    result.peak = Math.max(result.peak, result.equity);
+    result.max_drawdown = Math.min(result.max_drawdown, result.equity - result.peak);
+  }
+  return [...grouped.values()]
+    .map(row => ({...row, roi: row.net_pnl / capital * 100}))
+    .sort((a, b) => a.year.localeCompare(b.year));
 }
 
 function render(data) {
@@ -112,7 +139,16 @@ function render(data) {
   setMoney("netWithoutBestWorst", concentration.net_without_best_and_worst);
   $("batchCount").textContent = `${overview.batch_count} total`;
   lineChart(data.daily);
-  barChart(data.monthly);
+  const yearly = yearlyFromDaily(data.daily);
+  barChart(yearly, "yearlyChart", row => row.year);
+  barChart(data.monthly, "monthlyChart", row => row.month.slice(5) + "/" + row.month.slice(2, 4));
+  $("yearlyRows").innerHTML = yearly.map((row) => {
+    const pnlClass = Number(row.net_pnl) > 0 ? "positive" : Number(row.net_pnl) < 0 ? "negative" : "";
+    const bestClass = Number(row.best_day) >= 0 ? "positive" : "negative";
+    const drawdownClass = Number(row.max_drawdown) < 0 ? "negative" : "";
+    const roiClass = Number(row.roi) > 0 ? "positive" : Number(row.roi) < 0 ? "negative" : "";
+    return `<tr><td>${escapeHtml(row.year)}</td><td class="numeric ${pnlClass}">${money.format(row.net_pnl)}</td><td class="numeric ${bestClass}">${money.format(row.best_day)}</td><td class="numeric ${drawdownClass}">${money.format(row.max_drawdown)}</td><td class="numeric ${roiClass}">${number.format(row.roi)}%</td><td class="numeric">${row.losing_days}</td><td class="numeric">${row.traded_days}</td></tr>`;
+  }).join("");
   $("monthlyRows").innerHTML = data.monthly.map((row) => {
     const closeClass = Number(row.close) >= 0 ? "positive" : "negative";
     const bestClass = Number(row.best_day) >= 0 ? "positive" : "negative";
@@ -203,7 +239,7 @@ const sectionObserver = new IntersectionObserver(entries => {
     });
   }
 }, {rootMargin: "-15% 0px -60% 0px"});
-["performance", "intraday", "consistency", "monthly", "batches"].forEach(id => sectionObserver.observe($(id)));
+["performance", "intraday", "consistency", "yearly", "monthly", "batches"].forEach(id => sectionObserver.observe($(id)));
 
 $("equityButton").addEventListener("click", () => $("equityInput").click());
 $("equityInput").addEventListener("change", async () => {

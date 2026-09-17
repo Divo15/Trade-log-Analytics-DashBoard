@@ -47,6 +47,10 @@ PATH_TO_DATASET/
   next week/
   next2week/
   nifty monthly/
+  sensex current week/
+    sensex_summary.parquet
+    sensex_chain/
+      *.parquet
 ```
 
 The setting is saved per Windows user. The dataset dropdown then shows the
@@ -60,7 +64,7 @@ above.
 ## Run a backtest
 
 1. Choose a strategy `.py` file.
-2. Select **Weekly**, **Next Weekly**, or **Monthly**.
+2. Select a NIFTY expiry dataset or **SENSEX · current weekly expiry**.
 3. Review the available period and optional configuration.
 4. Click **Run backtest**.
 
@@ -89,10 +93,10 @@ average profit, average loss, profit factor and trade count. The user selects th
 winning combination using their own criteria. Profitable combinations are ranked
 with a transparent weighted score: 35% relative P&L, 35% lower drawdown, 15%
 average-win/average-loss ratio, 10% win rate and 5% fewer consecutive losses.
-The highest score is automatically rerun and its full analytics open without an
-extra confirmation click. The comparison table remains available for a manual override. Per-combination trade and equity
+The comparison table opens as soon as the sweep finishes. The recommended row is
+selected, but its full analytics run starts only when the user chooses it. Per-combination trade and equity
 files are temporary and are discarded after their metrics are calculated. The
-recommended combination is rerun once to create its validated trade log, equity
+recommended combination can be rerun once to create its validated trade log, equity
 file and complete analytics, then saved persistently in the per-user results folder. Manual
 overrides are displayed but are not added to history. The rerun must reproduce
 the sweep P&L, drawdown, win rate, and trade count or it fails with a
@@ -113,8 +117,10 @@ Active runs reconnect after a browser refresh. No market data is downloaded.
 
 The local `data/db` copy is excluded from Git. The downloaded source archive is
 preserved. Python caches and DuckDB scratch directories were excluded from the
-copy. Weekly, Next Weekly, Next2Week and Monthly are available in the NIFTY
-runner. Stock-options data is also saved, but uses a different layout and is not
+copy. Weekly, Next Weekly, Next2Week and Monthly are available for NIFTY. SENSEX
+current-week data appears when `sensex current week/sensex_summary.parquet` and
+`sensex current week/sensex_chain/*.parquet` are present. Stock-options data is
+also saved, but uses a different layout and is not
 offered as a NIFTY expiry dataset. ZIP/path inputs remain supported by the backend
 for integrations; the UI presents only saved datasets.
 
@@ -277,6 +283,29 @@ For a strategy that will run in this dashboard, use
 It requires a self-contained `run_strategy(context)` module, explicit
 `RUN_MODE`, declared sweep parameter mappings when needed, and market data read
 only from `context.market_data`.
+
+The backend accepts different strategy rules through this common interface,
+including long/short hedges and single runs or sweeps. Canonical trade and
+equity DataFrames are supported alongside row mappings; NumPy integer trade
+counts and read-only result mappings are accepted too. Strategy-specific
+column names still need an explicit trade mapper.
+
+Before a long backtest, validate on a representative sample dataset through
+the same worker the dashboard uses:
+
+```powershell
+.venv\Scripts\python.exe -m trade_log_dashboard.validate_strategy strategies\my_strategy.py --market-data data\sample --output outputs\my_strategy_check --timeout 120
+```
+
+Use your actual script and sample paths, and a new output folder. Add
+`--config config.json` for execution settings. Include all signal and execution
+days needed by the strategy in the sample. The command retains logs, available
+trade/equity artifacts and `validation.json`; a failed, empty, or timed-out
+variation produces a nonzero exit code. It runs the declared rules and sweep
+unchanged and does not interact with an active dashboard run. Equity mismatch
+errors include expected P&L, supplied P&L, and their difference, with the
+original 0.01 tolerance preserved. A passing sample validates compatibility,
+not the correctness of every trading decision on the full dataset.
 
 ## Test
 

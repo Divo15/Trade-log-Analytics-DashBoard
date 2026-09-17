@@ -53,6 +53,7 @@ class SharedCacheTests(unittest.TestCase):
                 first.iloc[0, 0] = 99
                 self.assertEqual(loader.read_frame([source], "csv-v1", read).iloc[0, 0], 1)
                 self.assertEqual(read.call_count, 1)
+                self.assertGreater(loader.memory_bytes, 0)
                 source.write_text("price\n200\n")
                 self.assertEqual(loader.read_frame([source], "csv-v1", read).iloc[0, 0], 200)
                 self.assertEqual(read.call_count, 2)
@@ -76,3 +77,37 @@ class SharedCacheTests(unittest.TestCase):
             self.assertEqual(loader.disk_bytes, 0)
             with self.assertRaisesRegex(ValueError, "bad source"):
                 loader.read_frame([], "bad", Mock(side_effect=ValueError("bad source")))
+
+    def test_partitioned_dataset_reuse_budget_and_cleanup(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "source.parquet"
+            source.write_bytes(b"source")
+            with MarketDataLoader(directory=root, disk_limit=100) as loader:
+                cache_folder = Path(loader._temporary.name)
+                build = Mock(side_effect=lambda destination: (
+                    (destination / "trade_date=2026-01-01").mkdir(parents=True),
+                    (destination / "trade_date=2026-01-01" / "part.parquet").write_bytes(b"data"),
+                ))
+                first = loader.partitioned_dataset([source], "by-date", build)
+                second = loader.partitioned_dataset([source], "by-date", build)
+                self.assertEqual(first, second)
+                self.assertEqual(build.call_count, 1)
+                self.assertEqual(loader.stats["partition_misses"], 1)
+                self.assertEqual(loader.stats["partition_hits"], 1)
+                self.assertLessEqual(loader.disk_bytes, loader.disk_limit)
+                loader.read_frame([], "extra", lambda: pd.DataFrame({"value": [1] * 100}))
+                self.assertLessEqual(loader.disk_bytes, loader.disk_limit)
+            self.assertFalse(cache_folder.exists())
+
+    def test_oversized_partitioned_dataset_is_not_retained(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source = root / "source.parquet"
+            source.write_bytes(b"source")
+            with MarketDataLoader(directory=root, disk_limit=3) as loader:
+                def build(destination):
+                    destination.mkdir()
+                    (destination / "part.parquet").write_bytes(b"too large")
+                self.assertIsNone(loader.partitioned_dataset([source], "large", build))
+                self.assertEqual(loader.disk_bytes, 0)

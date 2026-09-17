@@ -14,11 +14,11 @@ class DatasetCacheTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        for _, folder in datasets.DATASETS.values():
-            dataset = self.root / folder
-            (dataset / "nifty_chain").mkdir(parents=True)
-            (dataset / "nifty_summary.parquet").write_bytes(b"summary")
-            (dataset / "nifty_chain" / "part.parquet").write_bytes(b"chain")
+        for definition in datasets.DATASETS.values():
+            dataset = self.root / definition["folder"]
+            (dataset / definition["chain"]).mkdir(parents=True)
+            (dataset / definition["summary"]).write_bytes(b"summary")
+            (dataset / definition["chain"] / "part.parquet").write_bytes(b"chain")
 
     def test_unchanged_files_use_the_persistent_coverage_cache(self) -> None:
         with patch.object(datasets, "DATA_ROOT", self.root), patch.object(
@@ -39,7 +39,8 @@ class DatasetCacheTests(unittest.TestCase):
         ):
             datasets.catalog()
 
-        changed = self.root / datasets.DATASETS["weekly"][1] / "nifty_chain" / "part.parquet"
+        weekly_definition = datasets.DATASETS["weekly"]
+        changed = self.root / weekly_definition["folder"] / weekly_definition["chain"] / "part.parquet"
         changed.write_bytes(b"changed chain")
         with patch.object(datasets, "DATA_ROOT", self.root), patch.object(
             datasets, "_coverage", return_value=("2023-01-03", "2026-05-05", 759)
@@ -49,6 +50,19 @@ class DatasetCacheTests(unittest.TestCase):
         calculate.assert_called_once()
         weekly = next(row for row in catalog if row["id"] == "weekly")
         self.assertEqual((weekly["start_date"], weekly["trading_days"]), ("2023-01-03", 759))
+
+    def test_sensex_is_a_first_class_dataset(self) -> None:
+        with patch.object(datasets, "DATA_ROOT", self.root), patch.object(
+            datasets, "_coverage", return_value=("2024-01-01", "2026-09-01", 600)
+        ):
+            entry = next(row for row in datasets.catalog() if row["id"] == "sensex-weekly")
+            resolved, selected = datasets.resolve_dataset("sensex-weekly", self.root)
+        self.assertTrue(entry["available"])
+        self.assertEqual(entry["symbol"], "SENSEX")
+        self.assertEqual(entry["summary_file"], "sensex_summary.parquet")
+        self.assertEqual(entry["chain_folder"], "sensex_chain")
+        self.assertEqual(resolved, (self.root / "sensex current week").resolve())
+        self.assertEqual(selected, entry)
 
     def test_corrupt_cache_is_rebuilt(self) -> None:
         (self.root / datasets.CACHE_FILENAME).write_text("not json", encoding="utf-8")

@@ -158,6 +158,12 @@ class LocalRunner:
                         "start_date": dataset["start_date"],
                         "end_date": dataset["end_date"],
                     }
+                    instrument = config.get("instrument")
+                    if instrument is None:
+                        instrument = {}
+                    if not isinstance(instrument, dict):
+                        raise ValueError("Run configuration instrument must be a JSON object.")
+                    config["instrument"] = {**instrument, "symbol": dataset["symbol"]}
                 elif archives:
                     if len(archives) != 1 or not archives[0][1].lower().endswith(".zip"):
                         raise ValueError("Market-data upload must be one ZIP file.")
@@ -332,6 +338,7 @@ class LocalRunner:
             else:
                 job["error"] = "Backtest exceeded the 30-minute limit. Reduce the date range and retry."
         with self.lock:
+            job["finished"] = time.monotonic()
             if job["status"] == "cancelled":
                 return
             result_path = job["folder"] / "result.json"
@@ -354,7 +361,7 @@ class LocalRunner:
             with (job["folder"] / "run.log").open("rb") as handle:
                 handle.seek(max(0, handle.seek(0, 2) - 12000))
                 log = handle.read().decode("utf-8", errors="replace")
-            elapsed = int(time.monotonic() - job["started"])
+            elapsed = int(job.get("finished", time.monotonic()) - job["started"])
             progress = None
             progress_path = job["folder"] / "progress.json"
             if progress_path.is_file():
@@ -362,10 +369,50 @@ class LocalRunner:
                     progress = json.loads(progress_path.read_text(encoding="utf-8"))
                     completed = progress.get("completed", 0)
                     total = progress.get("total", 0)
-                    progress["estimated_remaining_seconds"] = (
-                        max(0, round(elapsed / completed * (total - completed)))
-                        if completed and total >= completed else None
+                    progress_elapsed = progress.get("elapsed_seconds", elapsed)
+                    progress["percentage"] = (
+                        round(completed / total * 100, 1) if total else 0.0
                     )
+                    progress["average_per_second"] = (
+                        completed / progress_elapsed if completed and progress_elapsed > 0 else None
+                    )
+                    if progress.get("mode") == "sweep":
+                        durations = progress.get("completed_combination_seconds") or []
+                        average = sum(durations) / len(durations) if durations else None
+                        current_elapsed = progress.get("combination_elapsed_seconds", 0.0)
+                        current_completed = progress.get("combination_completed", 0)
+                        current_total = progress.get("combination_total", 0)
+                        current_remaining = (
+                            current_elapsed / current_completed * (current_total - current_completed)
+                            if current_completed and current_total >= current_completed else None
+                        )
+                        future_count = max(0, total - completed - (1 if progress.get("current") else 0))
+                        if average is not None:
+                            active_remaining = (
+                                current_remaining if current_remaining is not None
+                                else max(0.0, average - current_elapsed)
+                            ) if progress.get("current") else 0.0
+                            overall_remaining = active_remaining + average * future_count
+                        elif current_remaining is not None:
+                            projected_duration = current_elapsed + current_remaining
+                            overall_remaining = current_remaining + projected_duration * future_count
+                        else:
+                            overall_remaining = None
+                        progress["average_combination_seconds"] = average
+                        progress["current_estimated_remaining_seconds"] = current_remaining
+                        progress["current_percentage"] = (
+                            round(current_completed / current_total * 100, 1)
+                            if current_total else None
+                        )
+                        progress["estimated_remaining_seconds"] = (
+                            max(0, round(overall_remaining))
+                            if overall_remaining is not None else None
+                        )
+                    else:
+                        progress["estimated_remaining_seconds"] = (
+                            max(0, round(progress_elapsed / completed * (total - completed)))
+                            if completed and total >= completed else None
+                        )
                 except (OSError, ValueError, TypeError):
                     progress = None
             return dict(id=identifier, status=job["status"], elapsed_seconds=elapsed, progress=progress,
@@ -379,6 +426,7 @@ class LocalRunner:
             if job["status"] == "running":
                 self._stop(job)
                 job["status"] = "cancelled"
+                job["finished"] = time.monotonic()
 
     def artifact(self, identifier, name):
         if name not in {"trades.csv", "trades.csv.manifest.json", "equity.csv", "run.log"}:

@@ -18,11 +18,12 @@ SUPPORTED ENGINE REFERENCE
 
 REQUIRED DASHBOARD CONTRACT
 1. Declare STRATEGY_CONTRACT_VERSION = "2".
-2. Declare RUN_MODE = "single" for one backtest. For an optimization, declare
+2. Declare RUN_MODE = "single" for one backtest. For a requested parameter search, declare
    RUN_MODE = "sweep" and a non-empty SWEEP_PARAMETER_SETS sequence containing
    every exact requested parameter mapping. Build the complete Cartesian product
    when the request supplies value lists. Do not impose an artificial combination
-   limit and do not rank or choose a winner inside the strategy.
+   limit and do not rank or choose a winner inside the strategy. A request to
+   improve execution speed alone must preserve the existing RUN_MODE and grid.
 3. Expose run_strategy(context). It receives context.run_id,
    context.market_data, and context.config.
 4. Read market data only from context.market_data. Never embed a local path,
@@ -31,20 +32,67 @@ REQUIRED DASHBOARD CONTRACT
    every declared sweep key affect or validate a genuine strategy setting.
 6. Keep the requested strategy behavior unchanged. Do not simplify or invent
    entries, exits, hedges, sizing, stops, targets, re-entries, or fill rules.
-7. Importing the module must not run a backtest, inspect files, load data,
+   For an optimization of an existing strategy, treat its baseline constants
+   as locked unless the request explicitly names them as sweep parameters.
+   This includes active-slot limits, maximum slot IDs, lot quantity, capital or
+   margin model, entry time, expiry filter, premium-selection rule, stop,
+   target, re-entry delay and limit, slippage, fees, and fill model.
+7. A sweep changes only the keys declared in SWEEP_PARAMETER_SETS. Give each
+   key a name that describes the rule it changes. For example, a parameter
+   selecting strikes by premium must not be named as though it changes an
+   entry trigger. Do not alter unrelated constants to speed up a sweep.
+8. If the strategy describes a capital, margin, or maximum-exposure limit,
+   implement that limit or state clearly that it is descriptive only. Distinguish
+   a maximum number of simultaneously active positions from a lifetime cap on
+   fresh slot IDs; do not substitute one for the other.
+9. Use the execution values supplied in context.config when the supported
+   engine permits it. If a strategy intentionally requires fixed slippage,
+   fees, multiplier, timezone, or fill assumptions, validate conflicting
+   dashboard values and fail clearly rather than silently ignoring them.
+10. Preserve the exact stop and re-entry state transitions. Use one canonical
+   exit-reason value at the producer and every consumer; do not test for an
+   alternate string that can make a stated re-entry path unreachable.
+11. Importing the module must not run a backtest, inspect files, load data,
    install packages, prompt for input, access the network, or write outputs.
-8. Return the engine's authoritative completed closed trades or legs and their
+12. Return the engine's authoritative completed closed trades or legs and their
    exact count. Return raw execution fields only: no P&L, drawdown, win rate,
    ranking, or analytics. Return observed equity snapshots only when the engine
    actually recorded them.
-9. Let errors propagate. Do not convert an error into a fake empty result or
+13. Let errors propagate. Do not convert an error into a fake empty result or
    partial success.
-10. Do not write trades.csv, equity.csv, manifests, analytics, or dashboard
+14. Do not write trades.csv, equity.csv, manifests, analytics, or dashboard
     output. The dashboard worker owns those files.
+15. For a sweep derived from a baseline strategy, include a verification step:
+    run the sweep combination whose parameters equal the baseline values on a
+    bounded representative sample and assert that completed trades and equity
+    snapshots exactly match the baseline. Do not claim parity without this
+    comparison.
+16. Performance work may cache only immutable market-data reads or deterministic
+    prepared market-data frames. It must never cache positions, trade state,
+    fills, P&L, or equity. Validate cached and uncached results for every sweep
+    combination on a bounded representative sample before delivery.
+17. Do not describe a loss streak ambiguously. If a report needs losing days,
+    calculate daily portfolio P&L by chronological evaluated expiry day; a day
+    is losing only when its aggregate P&L is below zero, and a daily streak
+    resets on profitable or zero-P&L evaluated days. Keep this distinct from a
+    consecutive losing-batch streak.
+18. For a new strategy, use its own specified rules; do not impose NIFTY E1-R1
+    slots, lot sizes, expiry filters or signals from an unrelated example.
+    Distinguish speeding up execution from requesting a parameter search.
+    Run the repository's validation command against a representative sample:
+    python -m trade_log_dashboard.validate_strategy strategy.py --market-data
+    <sample-dataset> --output <new-check-folder> --timeout 120
+    Include the signal history and execution days required by the strategy.
+    Inspect validation.json and every sweep outcome. Report missing data or
+    unavailable validation honestly; do not declare success from import-only
+    or signal-direction tests. Final equity must reconcile across all sessions
+    and LONG/SHORT legs, including fees and quantities.
 
 OUTPUT
 Return the complete Python module and then a brief note listing expected data
-schema, dependencies, fill assumptions, and any remaining limitations.
+schema, dependencies, fill assumptions, fixed execution assumptions, capital or
+exposure behavior, sweep keys, and any remaining limitations. For a derived
+sweep, also state the exact baseline combination used for parity verification.
 ```
 
 Before uploading, verify the strategy against
