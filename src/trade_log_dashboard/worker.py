@@ -82,7 +82,7 @@ def _execute_result(result, context, output_folder, dataset):
             "has_equity": False,
         }
     print(f"Validating and analysing {receipt.row_count} completed legs…", flush=True)
-    analysis = analyze_trade_log(receipt.output_path)
+    analysis = analyze_trade_log(receipt.output_path, validated_receipt=receipt)
     analysis["dataset"] = dataset or {"id": None, "label": "Custom data"}
     has_equity = result.get("equity_snapshots") is not None
     if has_equity:

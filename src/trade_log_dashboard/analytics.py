@@ -9,7 +9,7 @@ from typing import Any
 
 import duckdb
 
-from trade_log_exporter import TradeLogError, validate_trade_log_csv
+from trade_log_exporter import ExportReceipt, TradeLogError, validate_trade_log_csv
 
 
 def _json_value(value: Any) -> Any:
@@ -45,10 +45,10 @@ def _longest_underwater(drawdowns: list[float]) -> int:
     return longest
 
 
-def analyze_trade_log(csv_path: str | Path) -> dict[str, Any]:
+def analyze_trade_log(csv_path: str | Path, *, validated_receipt: ExportReceipt | None = None) -> dict[str, Any]:
     """Validate a schema-v1 CSV and calculate dashboard metrics with DuckDB."""
     path = Path(csv_path).resolve()
-    receipt = validate_trade_log_csv(path)
+    receipt = validated_receipt or validate_trade_log_csv(path)
     if receipt.row_count == 0:
         raise TradeLogError("The CSV is valid but contains no completed trades")
 
@@ -60,7 +60,7 @@ def analyze_trade_log(csv_path: str | Path) -> dict[str, Any]:
         )
         connection.execute(
             """
-            CREATE VIEW legs AS
+            CREATE TEMP TABLE legs AS
             SELECT
                 run_id,
                 trade_id,
@@ -89,7 +89,7 @@ def analyze_trade_log(csv_path: str | Path) -> dict[str, Any]:
         )
         connection.execute(
             """
-            CREATE VIEW batches AS
+            CREATE TEMP TABLE batches AS
             SELECT
                 batch_key,
                 MIN(entry_time) AS entry_time,
@@ -104,7 +104,7 @@ def analyze_trade_log(csv_path: str | Path) -> dict[str, Any]:
         )
         connection.execute(
             """
-            CREATE VIEW daily AS
+            CREATE TEMP TABLE daily AS
             SELECT
                 CAST(exit_time AS DATE) AS day,
                 COUNT(*) AS batches,

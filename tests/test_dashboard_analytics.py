@@ -101,6 +101,16 @@ class DashboardAnalyticsTest(unittest.TestCase):
         self.assertAlmostEqual(result["monthly"][0]["max_drawdown"], -1000)
         self.assertFalse(result["assumptions"]["fees_included"])
 
+    def test_backtest_worker_can_reuse_export_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary, "trades.csv")
+            receipt = export_trade_log([self.trade("t1", "b1", "LONG", "2026-01-02", 100, 110)], path)
+            with unittest.mock.patch("trade_log_dashboard.analytics.validate_trade_log_csv") as validate:
+                result = analyze_trade_log(path, validated_receipt=receipt)
+            validate.assert_not_called()
+            self.assertEqual(result["validation"]["row_count"], 1)
+            self.assertEqual(result["overview"]["net_pnl"], 500)
+
     def test_rejects_empty_trade_log(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary, "trades.csv")
