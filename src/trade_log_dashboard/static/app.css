@@ -309,6 +309,8 @@ td { font-size: 13px; padding-block: 13px; }
 .sweep-empty { color: var(--muted); text-align: center; }
 .comparison-badge { display: block; width: fit-content; margin-top: 5px; padding: 3px 7px; border-radius: 999px; background: var(--positive-pale); color: var(--positive); font-size: 10px; font-weight: 700; white-space: nowrap; }
 .sweep-open { min-height: 34px; white-space: nowrap; font-size: 12px; }
+.sweep-row-actions { display: flex; gap: 8px; align-items: center; white-space: nowrap; }
+.sweep-row-actions button { min-height: 34px; font-size: 12px; padding: 7px 10px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .data-gap { background: var(--surface-muted); border: 0; padding: 22px; margin-top: 24px; }
 .data-gap strong, .data-gap span, .data-gap p { font-size: 12px; }

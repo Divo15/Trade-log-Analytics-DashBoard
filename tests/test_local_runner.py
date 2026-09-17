@@ -303,30 +303,43 @@ def run_strategy(context):
         self.assertEqual(result["status"], "failed")
         self.assertIn("duplicates an earlier parameter set", result["error"])
 
-    def test_only_recommended_combination_is_saved_and_survives_restart(self):
+    def test_any_completed_combination_can_be_saved_and_survives_restart(self):
         sweep = self.finish(self.start(SWEEP_STRATEGY))
         self.assertEqual(sweep["status"], "succeeded", sweep)
         self.assertEqual(self.runner.history(), [])
-        with self.assertRaisesRegex(ValueError, "Only the recommended"):
-            self.runner.start_iteration(sweep["id"], 2, save_history=True)
+
+        third_id = self.runner.start_iteration(sweep["id"], 2, save_history=True)
+        third = self.finish(third_id)
+        self.assertEqual(third["status"], "succeeded", third)
+        self.assertEqual(third["history_id"], f"{sweep['id']}s2")
 
         best_id = self.runner.start_iteration(sweep["id"], 3, save_history=True)
         best = self.finish(best_id)
         self.assertEqual(best["status"], "succeeded", best)
-        self.assertEqual(best["history_id"], sweep["id"])
-        records = self.runner.history()
-        self.assertEqual(len(records), 1)
-        self.assertEqual(records[0]["parameters"], {"take_profit": 1.0})
-        self.assertEqual(records[0]["rank"], 1)
-        self.assertEqual(records[0]["metrics"]["net_pnl"], 10)
-        saved = self.runner.history_item(sweep["id"])
-        self.assertEqual(saved["analysis"]["overview"]["net_pnl"], 10)
-        self.assertTrue(self.runner.history_artifact(sweep["id"], "trades.csv").is_file())
+        self.assertEqual(best["history_id"], f"{sweep['id']}s3")
+
+        records = sorted(self.runner.history(), key=lambda record: record["parameters"]["take_profit"])
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0]["parameters"], {"take_profit": .8})
+        self.assertEqual(records[0]["rank"], 2)
+        self.assertEqual(records[0]["metrics"]["net_pnl"], 8)
+        self.assertEqual(records[1]["parameters"], {"take_profit": 1.0})
+        self.assertEqual(records[1]["rank"], 1)
+        self.assertEqual(records[1]["metrics"]["net_pnl"], 10)
+
+        third_history_id = f"{sweep['id']}s2"
+        best_history_id = f"{sweep['id']}s3"
+        self.assertEqual(self.runner.history_item(third_history_id)["analysis"]["overview"]["net_pnl"], 8)
+        self.assertEqual(self.runner.history_item(best_history_id)["analysis"]["overview"]["net_pnl"], 10)
+        self.assertTrue(self.runner.history_artifact(third_history_id, "trades.csv").is_file())
+        self.assertTrue(self.runner.history_artifact(best_history_id, "trades.csv").is_file())
 
         reopened = LocalRunner(history_root=self.market / "history")
         self.addCleanup(reopened.close)
-        self.assertEqual(reopened.history()[0]["id"], sweep["id"])
-        self.assertEqual(reopened.history_item(sweep["id"])["parameters"], {"take_profit": 1.0})
+        reopened_records = sorted(reopened.history(), key=lambda record: record["parameters"]["take_profit"])
+        self.assertEqual([record["id"] for record in reopened_records], [third_history_id, best_history_id])
+        self.assertEqual(reopened.history_item(third_history_id)["parameters"], {"take_profit": .8})
+        self.assertEqual(reopened.history_item(best_history_id)["parameters"], {"take_profit": 1.0})
 
     def test_selection_weights_prioritize_pnl_and_low_drawdown(self):
         self.assertEqual(SELECTION_WEIGHTS["net_pnl"], .35)

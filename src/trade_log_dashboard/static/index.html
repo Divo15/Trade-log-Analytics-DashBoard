@@ -16,7 +16,7 @@
     </a>
     <div class="topbar-actions">
       <span class="local-badge">Local workspace</span>
-      <button class="secondary-button" id="historyButton" type="button">Best history</button>
+      <button class="secondary-button" id="historyButton" type="button">Saved history</button>
       <button class="secondary-button" id="storageButton" type="button">Storage</button>
       <button class="secondary-button" id="backToSweepButton" type="button" hidden>View sweep comparison</button>
       <button class="secondary-button" id="newRunButton" type="button">New backtest</button>
@@ -74,11 +74,11 @@
     </section>
     <section class="panel history-panel" id="historyPanel" hidden aria-labelledby="historyTitle">
       <div class="panel-heading">
-        <div><h1 id="historyTitle" tabindex="-1">Best strategy history</h1><p>A recommended result is saved when you choose to run its full analytics.</p></div>
+        <div><h1 id="historyTitle" tabindex="-1">Saved strategy history</h1><p>Save any completed sweep combination after rerunning it for full analytics.</p></div>
         <span class="count-badge" id="historyCount">—</span>
       </div>
       <p class="sweep-note" id="historyStatus" role="status" aria-live="polite"></p>
-      <div class="table-scroll" tabindex="0" role="region" aria-label="Saved best strategy results">
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Saved strategy results">
         <table>
           <thead><tr><th>Saved</th><th>Strategy</th><th>Dataset</th><th>Parameters</th><th class="numeric">Score</th><th class="numeric">Net P&amp;L</th><th class="numeric">Max drawdown</th><th><span class="sr-only">Action</span></th></tr></thead>
           <tbody id="historyRows"></tbody>

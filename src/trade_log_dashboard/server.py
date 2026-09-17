@@ -96,7 +96,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 else:
                     raise KeyError(self.path)
             except (KeyError, FileNotFoundError, ValueError, json.JSONDecodeError):
-                self._json(HTTPStatus.NOT_FOUND, {"error": "Saved best result was not found."})
+                self._json(HTTPStatus.NOT_FOUND, {"error": "Saved result was not found."})
             return
         if self.path.startswith("/api/backtests/"):
             if not self._local_request():
@@ -250,7 +250,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
         try:
             parts = self.path.strip("/").split("/")
             if len(parts) == 6 and parts[3] == "iterations" and parts[5] == "run":
-                save_history = self.headers.get("X-Save-Best") == "1"
+                save_history = (
+                    self.headers.get("X-Save-History") == "1"
+                    or self.headers.get("X-Save-Best") == "1"
+                )
                 identifier = self.server.runner.start_iteration(parts[2], parts[4], save_history=save_history)
                 self._json(HTTPStatus.ACCEPTED, {"id": identifier, "status": "running"})
                 return

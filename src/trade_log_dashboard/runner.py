@@ -187,7 +187,7 @@ class LocalRunner:
                 raise
 
     def start_iteration(self, identifier, index, *, save_history=False):
-        """Rerun one optimizer row and retain full artifacts only for that selection."""
+        """Rerun one optimizer row and retain full artifacts for that selection."""
         with self.lock:
             if any(job["status"] == "running" for job in self.jobs.values()):
                 raise ValueError("A backtest is already running. Wait for it or cancel it first.")
@@ -201,9 +201,6 @@ class LocalRunner:
             if summary.get("status") != "succeeded" or not summary.get("metrics"):
                 raise ValueError("Choose a combination that completed with trades.")
             sweep = parent.get("result", {}).get("sweep", {})
-            recommended_index = sweep.get("recommended_index")
-            if save_history and int(index) != recommended_index:
-                raise ValueError("Only the recommended best combination can be saved to history.")
             ranked_summary = next(
                 (item for item in sweep.get("iterations", []) if item.get("index") == int(index)),
                 summary,
@@ -227,7 +224,7 @@ class LocalRunner:
                 shutil.rmtree(self.jobs.pop(oldest)["folder"])
             self.jobs[new_identifier] = self._launch(folder, SINGLE_RUN_TIMEOUT)
             self.jobs[new_identifier]["save_history"] = bool(save_history)
-            self.jobs[new_identifier]["history_parent_id"] = identifier
+            self.jobs[new_identifier]["history_parent_id"] = f"{identifier}s{int(index)}"
             self.jobs[new_identifier]["history_summary"] = ranked_summary
             threading.Thread(target=self._watch, args=(new_identifier,), daemon=True).start()
             return new_identifier
@@ -244,7 +241,7 @@ class LocalRunner:
         result = job.get("result", {})
         analysis = result.get("analysis")
         if not isinstance(analysis, dict):
-            raise ValueError("Completed best combination has no analytics to save.")
+            raise ValueError("Completed combination has no analytics to save.")
         history_id = job["history_parent_id"]
         summary = job["history_summary"]
         temporary = self.history_root / f".{history_id}-{uuid4().hex}.tmp"
@@ -351,7 +348,7 @@ class LocalRunner:
                     try:
                         self._save_history(identifier, job)
                     except Exception as exc:
-                        job["history_error"] = f"Best-result history could not be saved: {exc}"
+                        job["history_error"] = f"Saved-history result could not be saved: {exc}"
             except Exception as exc:
                 job.update(status="failed", error=f"Could not read backtest result: {exc}")
 

@@ -197,7 +197,7 @@ function downloads(id, hasEquity, iteration = null) {
 
 function historyDownloads(record) {
   const names = record.artifacts || [];
-  $("runDownloads").replaceChildren(document.createTextNode("Saved best outputs:"), ...names.map(name => {
+  $("runDownloads").replaceChildren(document.createTextNode("Saved run outputs:"), ...names.map(name => {
     const link = document.createElement("a");
     link.href = `/api/history/${record.id}/${name}`;
     link.textContent = name;
@@ -218,7 +218,7 @@ async function openHistory(identifier, button) {
     if (!response.ok) throw new Error(record.error || "Saved result could not be opened.");
     const tradeResponse = await fetch(`/api/history/${identifier}/trades.csv`);
     state.tradeFile = tradeResponse.ok ? new File([await tradeResponse.blob()], "trades.csv", {type:"text/csv"}) : null;
-    state.fileName = `Saved best · ${record.strategy}`;
+    state.fileName = `Saved run · ${record.strategy}`;
     $("historyPanel").hidden = true;
     hideStorage();
     $("sweepPanel").hidden = true;
@@ -248,20 +248,20 @@ async function showHistory() {
   $("backToSweepButton").hidden = true;
   hideStorage();
   $("historyPanel").hidden = false;
-  $("historyStatus").textContent = "Loading saved best results…";
+  $("historyStatus").textContent = "Loading saved results…";
   try {
     const response = await fetch("/api/history");
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "Best-result history could not be loaded.");
+    if (!response.ok) throw new Error(result.error || "Saved-result history could not be loaded.");
     const rows = result.history || [];
     $("historyCount").textContent = `${number.format(rows.length)} saved`;
-    $("historyStatus").textContent = rows.length ? "Recommended combinations are stored after you run them for full analytics." : "No recommended sweep result has been run and saved yet.";
+    $("historyStatus").textContent = rows.length ? "Saved combinations are stored after you run them for full analytics." : "No sweep result has been saved yet.";
     $("historyRows").innerHTML = rows.map(record => {
       const metrics = record.metrics || {};
       const drawdown = metrics.intraday_drawdown == null ? metrics.max_drawdown : metrics.intraday_drawdown;
       const dataset = record.dataset?.label || "Custom data";
       return `<tr><td>${historyDate.format(new Date(record.created_at))}</td><td>${escapeHtml(record.strategy || "Strategy")}</td><td>${escapeHtml(dataset)}</td><td class="sweep-parameters">${escapeHtml(parameterText(record.parameters))}</td><td class="numeric">${record.selection_score == null ? "—" : number.format(record.selection_score)}</td><td class="numeric ${Number(metrics.net_pnl) > 0 ? "positive" : ""}">${money.format(metrics.net_pnl)}</td><td class="numeric ${Number(drawdown) < 0 ? "negative" : ""}">${money.format(drawdown)}</td><td><button class="secondary-button history-open" data-history-id="${record.id}" type="button">View analytics</button></td></tr>`;
-    }).join("") || '<tr><td colspan="8" class="empty-table">Run a sweep to save its recommended result here.</td></tr>';
+    }).join("") || '<tr><td colspan="8" class="empty-table">Run a sweep and save any completed combination here.</td></tr>';
     $("historyRows").querySelectorAll(".history-open").forEach(button => button.addEventListener("click", () => openHistory(button.dataset.historyId, button)));
   } catch (error) {
     $("historyStatus").textContent = error.message;
@@ -277,7 +277,7 @@ function parameterText(parameters) {
   return entries.length ? entries.map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(" · ") : "Strategy defaults";
 }
 
-async function openSweepIteration(index, button, saveBest = false) {
+async function openSweepIteration(index, button, saveHistory = false) {
   if (!sweepRun || state.uploading) return;
   const original = button?.textContent;
   if (button) {
@@ -286,7 +286,7 @@ async function openSweepIteration(index, button, saveBest = false) {
   }
   try {
     const headers = {"X-Local-Runner":"1"};
-    if (saveBest) headers["X-Save-Best"] = "1";
+    if (saveHistory) headers["X-Save-History"] = "1";
     const response = await fetch(`/api/backtests/${sweepRun}/iterations/${index}/run`, {method:"POST", headers});
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || "Could not start the selected combination.");
@@ -295,7 +295,7 @@ async function openSweepIteration(index, button, saveBest = false) {
     busyRun(true);
     $("sweepPanel").hidden = true;
     $("runnerPanel").hidden = false;
-    $("runStatus").textContent = `Rerunning combination ${index + 1} to create its full analytics…`;
+    $("runStatus").textContent = `Rerunning combination ${index + 1} to create its full analytics${saveHistory ? " and save it" : ""}…`;
     $("runLog").textContent = "";
     $("runLogPanel").hidden = false;
     $("runnerPanel").scrollIntoView();
@@ -316,7 +316,7 @@ function renderSweep(sweep, id) {
   recommendedSweepIndex = sweep.recommended_index;
   $("viewSelectedSweep").disabled = true;
   $("sweepCount").textContent = `${sweep.iteration_count} variations`;
-  $("sweepNote").textContent = `${number.format(sweep.ranked_count || 0)} profitable candidates ranked · ${number.format(sweep.no_trade_count || 0)} without trades · ${number.format(sweep.failed_count || 0)} failed. Score: 35% P&L, 35% lower drawdown, 15% average win/loss ratio, 10% win rate, and 5% fewer consecutive losses. Review the comparison, then run a combination only when you want its full analytics.`;
+  $("sweepNote").textContent = `${number.format(sweep.ranked_count || 0)} profitable candidates ranked · ${number.format(sweep.no_trade_count || 0)} without trades · ${number.format(sweep.failed_count || 0)} failed. Score: 35% P&L, 35% lower drawdown, 15% average win/loss ratio, 10% win rate, and 5% fewer consecutive losses. Review the comparison, then run any combination for full analytics or save it to history.`;
   const parameterKeys = [...new Set(sweep.iterations.flatMap(item => Object.keys(item.parameters || {})))];
   $("sweepHead").innerHTML = `<tr><th>Select</th><th>Rank</th><th>Combination</th>${parameterKeys.map(key => `<th>${escapeHtml(key)}</th>`).join("")}<th class="numeric">Score</th><th class="numeric">Net P&amp;L</th><th class="numeric">Max drawdown</th><th class="numeric">Win rate</th><th class="numeric">Max consecutive losses</th><th class="numeric">Average profit</th><th class="numeric">Average loss</th><th class="numeric">Avg win/loss</th><th class="numeric">Profit factor</th><th class="numeric">Trades</th><th><span class="sr-only">Action</span></th></tr>`;
   const rankedRows = [...sweep.iterations].sort((left, right) =>
@@ -335,7 +335,7 @@ function renderSweep(sweep, id) {
     const ratio = metrics.average_win_loss_ratio == null ? (metrics.average_profit != null && metrics.average_loss == null ? "∞" : "—") : number.format(metrics.average_win_loss_ratio);
     const recommended = item.index === sweep.recommended_index ? '<span class="comparison-badge">Recommended</span>' : '';
     const componentTitle = metrics.selection_components ? escapeHtml(`P&L ${metrics.selection_components.net_pnl} · Drawdown ${metrics.selection_components.drawdown} · Win/loss ${metrics.selection_components.average_win_loss_ratio} · Win rate ${metrics.selection_components.win_rate} · Loss streak ${metrics.selection_components.max_consecutive_losses}`) : "";
-    return `<tr data-index="${item.index}"><td>${selector}</td><td>${item.rank ?? "—"}</td><td>${item.index + 1}${recommended}</td>${parameterCells}<td class="numeric" title="${componentTitle}">${metrics.selection_score == null ? "—" : number.format(metrics.selection_score)}</td><td class="numeric ${net > 0 ? "positive" : net < 0 ? "negative" : ""}">${money.format(net)}</td><td class="numeric ${Number(drawdown) < 0 ? "negative" : ""}">${money.format(drawdown)}</td><td class="numeric">${number.format(metrics.win_rate)}%</td><td class="numeric">${number.format(metrics.max_consecutive_losses)}</td><td class="numeric positive">${metrics.average_profit == null ? "—" : money.format(metrics.average_profit)}</td><td class="numeric ${Number(metrics.average_loss) < 0 ? "negative" : ""}">${metrics.average_loss == null ? "—" : money.format(metrics.average_loss)}</td><td class="numeric">${ratio}</td><td class="numeric">${metrics.profit_factor == null ? "—" : number.format(metrics.profit_factor)}</td><td class="numeric">${metrics.batch_count}</td><td><button class="secondary-button sweep-open" data-index="${item.index}" type="button">Run &amp; view analytics</button></td></tr>`;
+    return `<tr data-index="${item.index}"><td>${selector}</td><td>${item.rank ?? "—"}</td><td>${item.index + 1}${recommended}</td>${parameterCells}<td class="numeric" title="${componentTitle}">${metrics.selection_score == null ? "—" : number.format(metrics.selection_score)}</td><td class="numeric ${net > 0 ? "positive" : net < 0 ? "negative" : ""}">${money.format(net)}</td><td class="numeric ${Number(drawdown) < 0 ? "negative" : ""}">${money.format(drawdown)}</td><td class="numeric">${number.format(metrics.win_rate)}%</td><td class="numeric">${number.format(metrics.max_consecutive_losses)}</td><td class="numeric positive">${metrics.average_profit == null ? "—" : money.format(metrics.average_profit)}</td><td class="numeric ${Number(metrics.average_loss) < 0 ? "negative" : ""}">${metrics.average_loss == null ? "—" : money.format(metrics.average_loss)}</td><td class="numeric">${ratio}</td><td class="numeric">${metrics.profit_factor == null ? "—" : number.format(metrics.profit_factor)}</td><td class="numeric">${metrics.batch_count}</td><td><div class="sweep-row-actions"><button class="secondary-button sweep-open" data-index="${item.index}" type="button">Run &amp; view</button><button class="primary-button sweep-save" data-index="${item.index}" type="button">Run &amp; save</button></div></td></tr>`;
   }).join("");
   $("sweepRows").querySelectorAll(".sweep-select").forEach(input => input.addEventListener("change", () => {
     selectedSweepIndex = Number(input.value);
@@ -350,7 +350,16 @@ function renderSweep(sweep, id) {
       input.checked = true;
       input.dispatchEvent(new Event("change"));
     }
-    openSweepIteration(index, button, index === sweep.recommended_index);
+    openSweepIteration(index, button, false);
+  }));
+  $("sweepRows").querySelectorAll(".sweep-save").forEach(button => button.addEventListener("click", () => {
+    const index = Number(button.dataset.index);
+    const input = document.querySelector(`.sweep-select[value="${index}"]`);
+    if (input) {
+      input.checked = true;
+      input.dispatchEvent(new Event("change"));
+    }
+    openSweepIteration(index, button, true);
   }));
   if (sweep.recommended_index !== null && sweep.recommended_index !== undefined) {
     const recommendedInput = document.querySelector(`.sweep-select[value="${sweep.recommended_index}"]`);
@@ -376,7 +385,7 @@ $("viewSelectedSweep").addEventListener("click", () => {
     openSweepIteration(
       selectedSweepIndex,
       $("viewSelectedSweep"),
-      selectedSweepIndex === recommendedSweepIndex,
+      false,
     );
   }
 });
@@ -518,7 +527,7 @@ async function pollRun() {
       } else {
         $("backToSweepButton").hidden = true;
       }
-      if (job.history_id) $("runMeta").textContent += " · Saved to Best history";
+      if (job.history_id) $("runMeta").textContent += " · Saved to history";
       if (job.history_error) $("runStatus").textContent = job.history_error;
     } else if (job.status === "empty") {
       $("runStatus").textContent = job.result.message;
