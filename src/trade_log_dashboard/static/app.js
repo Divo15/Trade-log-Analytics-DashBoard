@@ -75,8 +75,7 @@ function barChart(rows, hostId, labelForRow) {
   host.setAttribute("aria-label", `${rows.length} periods. Net P&L ranges from ${money.format(min)} to ${money.format(max)}.`);
 }
 
-function yearlyFromDaily(rows) {
-  const capital = 1200000;
+function yearlyFromDaily(rows, capital) {
   const grouped = new Map();
   for (const row of rows) {
     const year = String(row.day).slice(0, 4);
@@ -92,9 +91,31 @@ function yearlyFromDaily(rows) {
     result.max_drawdown = Math.min(result.max_drawdown, result.equity - result.peak);
   }
   return [...grouped.values()]
-    .map(row => ({...row, roi: row.net_pnl / capital * 100}))
+    .map(row => ({...row, roi: Number.isFinite(capital) && capital > 0 ? row.net_pnl / capital * 100 : null}))
     .sort((a, b) => a.year.localeCompare(b.year));
 }
+
+function renderYearlyPerformance() {
+  if (!state.data) return;
+  const capital = Number($("investedCapital").value);
+  const valid = Number.isFinite(capital) && capital > 0;
+  $("investedCapital").setAttribute("aria-invalid", String(!valid && $("investedCapital").value !== ""));
+  const yearly = yearlyFromDaily(state.data.daily, capital);
+  barChart(yearly, "yearlyChart", row => row.year);
+  $("totalRoi").textContent = valid
+    ? `Total ROI: ${number.format(state.data.overview.net_pnl / capital * 100)}% · Net P&L ${money.format(state.data.overview.net_pnl)} ÷ capital invested ${money.format(capital)}`
+    : "Enter a positive capital amount to calculate ROI.";
+  $("yearlyRows").innerHTML = yearly.map((row) => {
+    const pnlClass = Number(row.net_pnl) > 0 ? "positive" : Number(row.net_pnl) < 0 ? "negative" : "";
+    const bestClass = Number(row.best_day) >= 0 ? "positive" : "negative";
+    const drawdownClass = Number(row.max_drawdown) < 0 ? "negative" : "";
+    const roiClass = Number(row.roi) > 0 ? "positive" : Number(row.roi) < 0 ? "negative" : "";
+    const roi = row.roi == null ? "—" : `${number.format(row.roi)}%`;
+    return `<tr><td>${escapeHtml(row.year)}</td><td class="numeric ${pnlClass}">${money.format(row.net_pnl)}</td><td class="numeric ${bestClass}">${money.format(row.best_day)}</td><td class="numeric ${drawdownClass}">${money.format(row.max_drawdown)}</td><td class="numeric ${roiClass}">${roi}</td><td class="numeric">${row.losing_days}</td><td class="numeric">${row.traded_days}</td></tr>`;
+  }).join("");
+}
+
+$("investedCapital").addEventListener("input", renderYearlyPerformance);
 
 function parameterSummary(parameters) {
   const entries = Object.entries(parameters || {});
@@ -147,16 +168,8 @@ function render(data, parameters = data.parameters) {
   setMoney("netWithoutBestWorst", concentration.net_without_best_and_worst);
   $("batchCount").textContent = `${overview.batch_count} total`;
   lineChart(data.daily);
-  const yearly = yearlyFromDaily(data.daily);
-  barChart(yearly, "yearlyChart", row => row.year);
+  renderYearlyPerformance();
   barChart(data.monthly, "monthlyChart", row => row.month.slice(5) + "/" + row.month.slice(2, 4));
-  $("yearlyRows").innerHTML = yearly.map((row) => {
-    const pnlClass = Number(row.net_pnl) > 0 ? "positive" : Number(row.net_pnl) < 0 ? "negative" : "";
-    const bestClass = Number(row.best_day) >= 0 ? "positive" : "negative";
-    const drawdownClass = Number(row.max_drawdown) < 0 ? "negative" : "";
-    const roiClass = Number(row.roi) > 0 ? "positive" : Number(row.roi) < 0 ? "negative" : "";
-    return `<tr><td>${escapeHtml(row.year)}</td><td class="numeric ${pnlClass}">${money.format(row.net_pnl)}</td><td class="numeric ${bestClass}">${money.format(row.best_day)}</td><td class="numeric ${drawdownClass}">${money.format(row.max_drawdown)}</td><td class="numeric ${roiClass}">${number.format(row.roi)}%</td><td class="numeric">${row.losing_days}</td><td class="numeric">${row.traded_days}</td></tr>`;
-  }).join("");
   $("monthlyRows").innerHTML = data.monthly.map((row) => {
     const closeClass = Number(row.close) >= 0 ? "positive" : "negative";
     const bestClass = Number(row.best_day) >= 0 ? "positive" : "negative";

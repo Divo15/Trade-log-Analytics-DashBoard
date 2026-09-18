@@ -235,7 +235,13 @@
 
       <section class="panel yearly-panel" id="yearly" aria-labelledby="yearlyTitle">
         <div class="panel-heading">
-          <div><h2 id="yearlyTitle">Year-on-year P&amp;L</h2><p>Net P&amp;L and closed-trade drawdown by exit year · ROI on ₹12 lakh capital</p></div>
+          <div><h2 id="yearlyTitle">Year-on-year P&amp;L</h2><p>Net P&amp;L and closed-trade drawdown by exit year · ROI = net P&amp;L ÷ capital invested × 100</p></div>
+        </div>
+        <div class="roi-controls">
+          <label for="investedCapital">Capital invested (₹)</label>
+          <input id="investedCapital" type="number" min="0.01" step="any" inputmode="decimal" placeholder="e.g. 300000" aria-describedby="roiHelp">
+          <p id="roiHelp">Use the same capital amount for every combination and yearly ROI calculation.</p>
+          <p id="totalRoi" role="status" aria-live="polite"></p>
         </div>
         <div class="chart-shell monthly-chart" id="yearlyChart" role="img" aria-label="Year-on-year P and L bar chart"></div>
         <div class="table-scroll yearly-table-scroll" tabindex="0" role="region" aria-label="Year-on-year performance data">
