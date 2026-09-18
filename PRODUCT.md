@@ -22,11 +22,11 @@ Each teammate selects their dataset parent folder, while settings, logs, cached
 metadata, and saved results remain in that operating-system user's writable app-data folder.
 Sweep variations execute sequentially and remain separate. The optimizer compares
 all declared combinations with a transparent weighted recommendation that emphasizes
-high P&L and low drawdown. The recommended combination is rerun and opened
-automatically; the user can return to the comparison and override it. Each sweep
-row retains compact metrics only. The chosen combination is rerun to create and verify its complete analytics and downloadable
-artifacts. Only the automatically recommended winner is added to persistent
-history; opening a manual override does not add another history entry.
+high P&L and low drawdown. Users can save any completed combination's parameters
+and compact metrics directly to history without rerunning it, or explicitly run
+a combination for full analytics and downloadable artifacts. Existing saved
+analytics remain accessible. ROI uses net profit divided by the user-entered
+capital invested, multiplied by 100; it stays unavailable until capital is entered.
 
 ## Brand Personality
 

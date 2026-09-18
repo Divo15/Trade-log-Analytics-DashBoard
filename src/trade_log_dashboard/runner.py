@@ -1,6 +1,6 @@
 """One local backtest at a time, with polling, cancellation and downloadable outputs."""
 import ast
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -73,6 +73,7 @@ class LocalRunner:
         self.storage = tempfile.TemporaryDirectory(prefix="local-backtests-")
         self.history_root = Path(history_root or HISTORY_ROOT).resolve()
         self.history_root.mkdir(parents=True, exist_ok=True)
+        self._last_history_timestamp = None
         self.dataset_root = Path(dataset_root).resolve() if dataset_root else None
         self.dataset_cache_path = Path(dataset_cache_path).resolve() if dataset_cache_path else None
 
@@ -230,6 +231,44 @@ class LocalRunner:
             threading.Thread(target=self._watch, args=(new_identifier,), daemon=True).start()
             return new_identifier
 
+    def save_combination(self, identifier, index):
+        """Persist existing sweep parameters and metrics without executing a strategy."""
+        with self.lock:
+            parent = self.jobs[identifier]
+            if parent["status"] != "succeeded" or not str(index).isdigit():
+                raise ValueError("The optimizer run or selected combination is unavailable.")
+            summary = next((item for item in parent.get("result", {}).get("sweep", {}).get("iterations", [])
+                            if item.get("index") == int(index)), None)
+            if not summary or summary.get("status") != "succeeded" or not summary.get("metrics"):
+                raise ValueError("Choose a combination that completed with trades.")
+            history_id = f"{identifier}s{int(index)}"
+            target = self._history_folder(history_id)
+            if (target / "metadata.json").is_file():
+                return json.loads((target / "metadata.json").read_text(encoding="utf-8"))
+            request = json.loads((parent["folder"] / "request.json").read_text(encoding="utf-8"))
+            metadata = {
+                "id": history_id,
+                "created_at": self._next_history_timestamp(),
+                "strategy": request.get("entrypoint", "Strategy"),
+                "dataset": request.get("dataset"),
+                "parameters": summary.get("parameters", {}),
+                "rank": summary.get("rank"),
+                "selection_score": summary["metrics"].get("selection_score"),
+                "metrics": summary["metrics"],
+                "artifacts": [],
+                "kind": "combination",
+            }
+            temporary = self.history_root / f".{history_id}-{uuid4().hex}.tmp"
+            temporary.mkdir()
+            try:
+                (temporary / "metadata.json").write_text(json.dumps(metadata, allow_nan=False), encoding="utf-8")
+                temporary.replace(target)
+            except Exception:
+                shutil.rmtree(temporary, ignore_errors=True)
+                raise
+            self._prune_saved_history()
+            return metadata
+
     def _history_folder(self, identifier):
         if not identifier or not identifier.isascii() or not identifier.isalnum():
             raise KeyError(identifier)
@@ -237,6 +276,14 @@ class LocalRunner:
         if not folder.is_relative_to(self.history_root):
             raise KeyError(identifier)
         return folder
+
+    def _next_history_timestamp(self):
+        """Return a timestamp that preserves save order when saves are very close together."""
+        current = datetime.now(timezone.utc)
+        if self._last_history_timestamp is not None and current <= self._last_history_timestamp:
+            current = self._last_history_timestamp + timedelta(microseconds=1)
+        self._last_history_timestamp = current
+        return current.isoformat()
 
     def _save_history(self, identifier, job):
         result = job.get("result", {})
@@ -260,7 +307,7 @@ class LocalRunner:
             )
             metadata = {
                 "id": history_id,
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": self._next_history_timestamp(),
                 "strategy": analysis.get("overview", {}).get("strategy", "Strategy"),
                 "dataset": analysis.get("dataset"),
                 "parameters": summary.get("parameters", {}),
@@ -314,7 +361,8 @@ class LocalRunner:
         with self.lock:
             folder = self._history_folder(identifier)
             metadata = json.loads((folder / "metadata.json").read_text(encoding="utf-8"))
-            metadata["analysis"] = json.loads((folder / "analysis.json").read_text(encoding="utf-8"))
+            metadata["analysis"] = (json.loads((folder / "analysis.json").read_text(encoding="utf-8"))
+                                   if metadata.get("kind") != "combination" else None)
             return metadata
 
     def history_artifact(self, identifier, name):

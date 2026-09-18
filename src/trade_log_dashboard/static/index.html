@@ -74,7 +74,7 @@
     </section>
     <section class="panel history-panel" id="historyPanel" hidden aria-labelledby="historyTitle">
       <div class="panel-heading">
-        <div><h1 id="historyTitle" tabindex="-1">Saved strategy history</h1><p>Save any completed sweep combination after rerunning it for full analytics.</p></div>
+        <div><h1 id="historyTitle" tabindex="-1">Saved strategy history</h1><p>Save completed sweep combinations with their parameters and metrics. No rerun needed.</p></div>
         <span class="count-badge" id="historyCount">—</span>
       </div>
       <p class="sweep-note" id="historyStatus" role="status" aria-live="polite"></p>
@@ -92,6 +92,7 @@
         <div class="sweep-heading-actions"><span class="count-badge" id="sweepCount">—</span><button class="primary-button" id="viewSelectedSweep" type="button" disabled>Run selected &amp; view analytics</button></div>
       </div>
       <div class="sweep-note" id="sweepNote">Recommended score: 25% total P&amp;L, 25% recent-year P&amp;L, 25% lower drawdown, 10% average win/loss ratio, 10% win rate, and 5% fewer consecutive losses. You can override the recommendation.</div>
+      <p class="sweep-note" id="sweepSaveStatus" role="status" aria-live="polite"></p>
       <div class="table-scroll sweep-table-scroll" tabindex="0" role="region" aria-label="Sweep variation comparison">
         <table>
           <thead id="sweepHead"><tr><th>Select</th><th>Rank</th><th>Combination</th><th>Parameters</th><th class="numeric">Score</th><th class="numeric">Net P&amp;L</th><th>Recent P&amp;L</th><th class="numeric">Max drawdown</th><th class="numeric">Win rate</th><th class="numeric">Max consecutive losses</th><th class="numeric">Average profit</th><th class="numeric">Average loss</th><th class="numeric">Avg win/loss</th><th class="numeric">Profit factor</th><th class="numeric">Trades</th><th><span class="sr-only">Action</span></th></tr></thead>
@@ -234,7 +235,13 @@
 
       <section class="panel yearly-panel" id="yearly" aria-labelledby="yearlyTitle">
         <div class="panel-heading">
-          <div><h2 id="yearlyTitle">Year-on-year P&amp;L</h2><p>Net P&amp;L and closed-trade drawdown by exit year · ROI on ₹12 lakh capital</p></div>
+          <div><h2 id="yearlyTitle">Year-on-year P&amp;L</h2><p>Net P&amp;L and closed-trade drawdown by exit year · ROI = net profit ÷ capital invested × 100</p></div>
+        </div>
+        <div class="roi-controls">
+          <label for="investedCapital">Capital invested (₹)</label>
+          <input id="investedCapital" type="number" min="0.01" step="any" inputmode="decimal" placeholder="e.g. 300000" aria-describedby="roiHelp">
+          <p id="roiHelp">Enter the capital invested. The same amount is used for each year's ROI.</p>
+          <p id="totalRoi" role="status" aria-live="polite"></p>
         </div>
         <div class="chart-shell monthly-chart" id="yearlyChart" role="img" aria-label="Year-on-year P and L bar chart"></div>
         <div class="table-scroll yearly-table-scroll" tabindex="0" role="region" aria-label="Year-on-year performance data">
