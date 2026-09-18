@@ -339,6 +339,7 @@ function renderSweep(sweep, id, {partial = false} = {}) {
   selectedSweepIndex = null;
   recommendedSweepIndex = sweep.recommended_index;
   $("viewSelectedSweep").disabled = true;
+  $("saveSelectedSweep").disabled = true;
   const processed = sweep.processed_count ?? sweep.iterations.length;
   $("sweepCount").textContent = partial ? `${processed} of ${sweep.iteration_count} complete` : `${sweep.iteration_count} variations`;
   $("resumeSweepButton").hidden = !partial || processed >= sweep.iteration_count;
@@ -373,6 +374,7 @@ function renderSweep(sweep, id, {partial = false} = {}) {
   $("sweepRows").querySelectorAll(".sweep-select").forEach(input => input.addEventListener("change", () => {
     selectedSweepIndex = Number(input.value);
     $("viewSelectedSweep").disabled = false;
+    $("saveSelectedSweep").disabled = false;
     document.querySelectorAll("#sweepRows tr").forEach(row => row.removeAttribute("aria-current"));
     input.closest("tr").setAttribute("aria-current", "true");
   }));
@@ -419,6 +421,12 @@ $("viewSelectedSweep").addEventListener("click", () => {
       selectedSweepIndex,
       $("viewSelectedSweep"),
     );
+  }
+});
+
+$("saveSelectedSweep").addEventListener("click", () => {
+  if (selectedSweepIndex !== null) {
+    saveSweepCombination(selectedSweepIndex, $("saveSelectedSweep"));
   }
 });
 
