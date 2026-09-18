@@ -303,6 +303,30 @@ def run_strategy(context):
         self.assertEqual(selected_request["config"]["parameters"], {"take_profit": .8})
         self.assertEqual(selected_request["optimizer_parent_id"], result["id"])
 
+    def test_save_combination_without_rerunning_survives_restart(self):
+        sweep = self.finish(self.start(SWEEP_STRATEGY))
+        self.assertEqual(sweep["status"], "succeeded", sweep)
+        with patch.object(self.runner, "_launch", side_effect=AssertionError("Must not rerun")):
+            record = self.runner.save_combination(sweep["id"], 2)
+            self.assertEqual(self.runner.save_combination(sweep["id"], 2), record)
+        self.assertEqual(record["parameters"], {"take_profit": .8})
+        self.assertEqual(record["metrics"]["net_pnl"], 8)
+        self.assertIsNotNone(record["rank"])
+        self.assertIsNotNone(record["selection_score"])
+        self.assertEqual(record["artifacts"], [])
+        self.assertEqual(record["kind"], "combination")
+        self.assertEqual(len(self.runner.history()), 1)
+        reopened = LocalRunner(history_root=self.market / "history")
+        self.addCleanup(reopened.close)
+        saved = reopened.history_item(record["id"])
+        self.assertEqual(saved["parameters"], record["parameters"])
+        self.assertEqual(saved["metrics"], record["metrics"])
+        self.assertIsNone(saved["analysis"])
+        with self.assertRaises(ValueError):
+            self.runner.save_combination(sweep["id"], 99)
+        with self.assertRaises(ValueError):
+            self.runner.save_combination(sweep["id"], "../0")
+
     def test_sweep_rejects_duplicate_parameter_sets(self):
         source = SWEEP_STRATEGY.replace('{"take_profit": 0.6}', '{"take_profit": 0.4}')
         result = self.finish(self.start(source))

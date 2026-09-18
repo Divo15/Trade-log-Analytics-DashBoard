@@ -249,6 +249,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         try:
             parts = self.path.strip("/").split("/")
+            if len(parts) == 6 and parts[3] == "iterations" and parts[5] == "save":
+                record = self.server.runner.save_combination(parts[2], parts[4])
+                self._json(HTTPStatus.OK, record)
+                return
             if len(parts) == 4 and parts[-1] == "resume":
                 identifier = self.server.runner.resume(parts[2])
                 self._json(HTTPStatus.ACCEPTED, {"id": identifier, "status": "running"})

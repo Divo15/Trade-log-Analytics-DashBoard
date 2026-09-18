@@ -256,12 +256,15 @@ async function showHistory() {
     if (!response.ok) throw new Error(result.error || "Saved-result history could not be loaded.");
     const rows = result.history || [];
     $("historyCount").textContent = `${number.format(rows.length)} saved`;
-    $("historyStatus").textContent = rows.length ? "Saved combinations are stored after you run them for full analytics." : "No sweep result has been saved yet.";
+    $("historyStatus").textContent = rows.length ? "Saved parameters and sweep metrics are available here without rerunning." : "No sweep result has been saved yet.";
     $("historyRows").innerHTML = rows.map(record => {
       const metrics = record.metrics || {};
       const drawdown = metrics.intraday_drawdown == null ? metrics.max_drawdown : metrics.intraday_drawdown;
       const dataset = record.dataset?.label || "Custom data";
-      return `<tr><td>${historyDate.format(new Date(record.created_at))}</td><td>${escapeHtml(record.strategy || "Strategy")}</td><td>${escapeHtml(dataset)}</td><td class="sweep-parameters">${escapeHtml(parameterText(record.parameters))}</td><td class="numeric">${record.selection_score == null ? "—" : number.format(record.selection_score)}</td><td class="numeric ${Number(metrics.net_pnl) > 0 ? "positive" : ""}">${money.format(metrics.net_pnl)}</td><td class="numeric ${Number(drawdown) < 0 ? "negative" : ""}">${money.format(drawdown)}</td><td><button class="secondary-button history-open" data-history-id="${record.id}" type="button">View analytics</button></td></tr>`;
+      const action = record.kind === "combination"
+        ? "Parameters saved"
+        : `<button class="secondary-button history-open" data-history-id="${record.id}" type="button">View analytics</button>`;
+      return `<tr><td>${historyDate.format(new Date(record.created_at))}</td><td>${escapeHtml(record.strategy || "Strategy")}</td><td>${escapeHtml(dataset)}</td><td class="sweep-parameters">${escapeHtml(parameterText(record.parameters))}</td><td class="numeric">${record.selection_score == null ? "—" : number.format(record.selection_score)}</td><td class="numeric ${Number(metrics.net_pnl) > 0 ? "positive" : ""}">${money.format(metrics.net_pnl)}</td><td class="numeric ${Number(drawdown) < 0 ? "negative" : ""}">${money.format(drawdown)}</td><td>${action}</td></tr>`;
     }).join("") || '<tr><td colspan="8" class="empty-table">Run a sweep and save any completed combination here.</td></tr>';
     $("historyRows").querySelectorAll(".history-open").forEach(button => button.addEventListener("click", () => openHistory(button.dataset.historyId, button)));
   } catch (error) {
@@ -278,7 +281,26 @@ function parameterText(parameters) {
   return entries.length ? entries.map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(" · ") : "Strategy defaults";
 }
 
-async function openSweepIteration(index, button, saveHistory = false) {
+async function saveSweepCombination(index, button) {
+  if (!sweepRun || state.uploading) return;
+  button.disabled = true;
+  button.textContent = "Saving…";
+  try {
+    const response = await fetch(`/api/backtests/${sweepRun}/iterations/${index}/save`, {
+      method: "POST", headers: {"X-Local-Runner": "1"}
+    });
+    const record = await response.json();
+    if (!response.ok) throw new Error(record.error || "Could not save this combination.");
+    button.textContent = "Saved";
+    $("sweepSaveStatus").textContent = `Combination ${index + 1} saved to history.`;
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "Save combination";
+    $("sweepSaveStatus").textContent = error.message;
+  }
+}
+
+async function openSweepIteration(index, button) {
   if (!sweepRun || state.uploading) return;
   const original = button?.textContent;
   if (button) {
@@ -286,9 +308,9 @@ async function openSweepIteration(index, button, saveHistory = false) {
     button.textContent = "Starting…";
   }
   try {
-    const headers = {"X-Local-Runner":"1"};
-    if (saveHistory) headers["X-Save-History"] = "1";
-    const response = await fetch(`/api/backtests/${sweepRun}/iterations/${index}/run`, {method:"POST", headers});
+    const response = await fetch(`/api/backtests/${sweepRun}/iterations/${index}/run`, {
+      method:"POST", headers: {"X-Local-Runner":"1"}
+    });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || "Could not start the selected combination.");
     activeRun = result.id;
@@ -296,7 +318,7 @@ async function openSweepIteration(index, button, saveHistory = false) {
     busyRun(true);
     $("sweepPanel").hidden = true;
     $("runnerPanel").hidden = false;
-    $("runStatus").textContent = `Rerunning combination ${index + 1} to create its full analytics${saveHistory ? " and save it" : ""}…`;
+    $("runStatus").textContent = `Rerunning combination ${index + 1} to create its full analytics…`;
     $("runLog").textContent = "";
     $("runLogPanel").hidden = false;
     $("runnerPanel").scrollIntoView();
@@ -313,6 +335,7 @@ async function openSweepIteration(index, button, saveHistory = false) {
 
 function renderSweep(sweep, id, {partial = false} = {}) {
   sweepRun = id;
+  $("sweepSaveStatus").textContent = "";
   selectedSweepIndex = null;
   recommendedSweepIndex = sweep.recommended_index;
   $("viewSelectedSweep").disabled = true;
@@ -345,7 +368,7 @@ function renderSweep(sweep, id, {partial = false} = {}) {
     const recentPnl = Object.entries(metrics.yearly_net_pnl || {}).sort(([left], [right]) => right.localeCompare(left)).slice(0, 2).map(([year, pnl]) => `${escapeHtml(year)} ${money.format(pnl)}`).join(" · ") || "—";
     const recommended = item.index === sweep.recommended_index ? '<span class="comparison-badge">Recommended</span>' : '';
     const componentTitle = metrics.selection_components ? escapeHtml(`Points — Total P&L ${metrics.selection_components.net_pnl} · Recent years ${metrics.selection_components.recent_year_pnl} · Drawdown ${metrics.selection_components.drawdown} · Win/loss ${metrics.selection_components.average_win_loss_ratio} · Win rate ${metrics.selection_components.win_rate} · Loss streak ${metrics.selection_components.max_consecutive_losses}`) : "";
-    return `<tr data-index="${item.index}"><td>${selector}</td><td>${item.rank ?? "—"}</td><td>${item.index + 1}${recommended}</td>${parameterCells}<td class="numeric" title="${componentTitle}">${metrics.selection_score == null ? "—" : number.format(metrics.selection_score)}</td><td class="numeric ${net > 0 ? "positive" : net < 0 ? "negative" : ""}">${money.format(net)}</td><td>${recentPnl}</td><td class="numeric ${Number(drawdown) < 0 ? "negative" : ""}">${money.format(drawdown)}</td><td class="numeric">${number.format(metrics.win_rate)}%</td><td class="numeric">${number.format(metrics.max_consecutive_losses)}</td><td class="numeric positive">${metrics.average_profit == null ? "—" : money.format(metrics.average_profit)}</td><td class="numeric ${Number(metrics.average_loss) < 0 ? "negative" : ""}">${metrics.average_loss == null ? "—" : money.format(metrics.average_loss)}</td><td class="numeric">${ratio}</td><td class="numeric">${metrics.profit_factor == null ? "—" : number.format(metrics.profit_factor)}</td><td class="numeric">${metrics.batch_count}</td><td><div class="sweep-row-actions"><button class="secondary-button sweep-open" data-index="${item.index}" type="button">Run &amp; view</button><button class="primary-button sweep-save" data-index="${item.index}" type="button">Run &amp; save</button></div></td></tr>`;
+    return `<tr data-index="${item.index}"><td>${selector}</td><td>${item.rank ?? "—"}</td><td>${item.index + 1}${recommended}</td>${parameterCells}<td class="numeric" title="${componentTitle}">${metrics.selection_score == null ? "—" : number.format(metrics.selection_score)}</td><td class="numeric ${net > 0 ? "positive" : net < 0 ? "negative" : ""}">${money.format(net)}</td><td>${recentPnl}</td><td class="numeric ${Number(drawdown) < 0 ? "negative" : ""}">${money.format(drawdown)}</td><td class="numeric">${number.format(metrics.win_rate)}%</td><td class="numeric">${number.format(metrics.max_consecutive_losses)}</td><td class="numeric positive">${metrics.average_profit == null ? "—" : money.format(metrics.average_profit)}</td><td class="numeric ${Number(metrics.average_loss) < 0 ? "negative" : ""}">${metrics.average_loss == null ? "—" : money.format(metrics.average_loss)}</td><td class="numeric">${ratio}</td><td class="numeric">${metrics.profit_factor == null ? "—" : number.format(metrics.profit_factor)}</td><td class="numeric">${metrics.batch_count}</td><td><div class="sweep-row-actions"><button class="secondary-button sweep-open" data-index="${item.index}" type="button">Run &amp; view</button><button class="primary-button sweep-save" data-index="${item.index}" type="button">Save combination</button></div></td></tr>`;
   }).join("");
   $("sweepRows").querySelectorAll(".sweep-select").forEach(input => input.addEventListener("change", () => {
     selectedSweepIndex = Number(input.value);
@@ -360,7 +383,7 @@ function renderSweep(sweep, id, {partial = false} = {}) {
       input.checked = true;
       input.dispatchEvent(new Event("change"));
     }
-    openSweepIteration(index, button, false);
+    openSweepIteration(index, button);
   }));
   $("sweepRows").querySelectorAll(".sweep-save").forEach(button => button.addEventListener("click", () => {
     const index = Number(button.dataset.index);
@@ -369,7 +392,7 @@ function renderSweep(sweep, id, {partial = false} = {}) {
       input.checked = true;
       input.dispatchEvent(new Event("change"));
     }
-    openSweepIteration(index, button, true);
+    saveSweepCombination(index, button);
   }));
   if (sweep.recommended_index !== null && sweep.recommended_index !== undefined) {
     const recommendedInput = document.querySelector(`.sweep-select[value="${sweep.recommended_index}"]`);
@@ -395,7 +418,6 @@ $("viewSelectedSweep").addEventListener("click", () => {
     openSweepIteration(
       selectedSweepIndex,
       $("viewSelectedSweep"),
-      false,
     );
   }
 });

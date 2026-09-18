@@ -256,6 +256,53 @@ class LocalRunner:
             ).start()
             return identifier
 
+    def save_combination(self, identifier, index):
+        """Persist a completed sweep row without executing the strategy again."""
+        with self.lock:
+            parent = self.jobs[identifier]
+            if parent["status"] not in {"succeeded", "cancelled"} or not str(index).isdigit():
+                raise ValueError("The optimizer run or selected combination is unavailable.")
+            summary_path = parent["folder"] / "iterations" / str(int(index)) / "summary.json"
+            if not summary_path.is_file():
+                raise ValueError("The selected combination is unavailable.")
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            if summary.get("status") != "succeeded" or not summary.get("metrics"):
+                raise ValueError("Choose a combination that completed with trades.")
+            sweep = parent.get("result", {}).get("sweep", {}) or self._partial_sweep(parent) or {}
+            ranked_summary = next(
+                (item for item in sweep.get("iterations", []) if item.get("index") == int(index)),
+                summary,
+            )
+            history_id = f"{identifier}s{int(index)}"
+            target = self._history_folder(history_id)
+            if (target / "metadata.json").is_file():
+                return json.loads((target / "metadata.json").read_text(encoding="utf-8"))
+            request = json.loads((parent["folder"] / "request.json").read_text(encoding="utf-8"))
+            metadata = {
+                "id": history_id,
+                "created_at": self._next_history_timestamp(),
+                "strategy": request.get("entrypoint", "Strategy"),
+                "dataset": request.get("dataset"),
+                "parameters": ranked_summary.get("parameters", {}),
+                "rank": ranked_summary.get("rank"),
+                "selection_score": ranked_summary.get("metrics", {}).get("selection_score"),
+                "metrics": ranked_summary.get("metrics", {}),
+                "artifacts": [],
+                "kind": "combination",
+            }
+            temporary = self.history_root / f".{history_id}-{uuid4().hex}.tmp"
+            temporary.mkdir()
+            try:
+                (temporary / "metadata.json").write_text(
+                    json.dumps(metadata, allow_nan=False), encoding="utf-8"
+                )
+                temporary.replace(target)
+            except Exception:
+                shutil.rmtree(temporary, ignore_errors=True)
+                raise
+            self._prune_saved_history()
+            return metadata
+
     def _history_folder(self, identifier):
         if not identifier or not identifier.isascii() or not identifier.isalnum():
             raise KeyError(identifier)
@@ -358,7 +405,10 @@ class LocalRunner:
         with self.lock:
             folder = self._history_folder(identifier)
             metadata = json.loads((folder / "metadata.json").read_text(encoding="utf-8"))
-            metadata["analysis"] = json.loads((folder / "analysis.json").read_text(encoding="utf-8"))
+            metadata["analysis"] = (
+                json.loads((folder / "analysis.json").read_text(encoding="utf-8"))
+                if metadata.get("kind") != "combination" else None
+            )
             return metadata
 
     def history_artifact(self, identifier, name):
