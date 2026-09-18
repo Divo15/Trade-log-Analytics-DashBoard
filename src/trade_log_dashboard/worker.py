@@ -274,6 +274,24 @@ def _write_partial_sweep(folder, sweep):
         temporary.unlink(missing_ok=True)
 
 
+def _existing_iteration(iteration_folder, index, parameters):
+    """Return a prior completed iteration only when it matches this sweep input."""
+    summary_path = iteration_folder / "summary.json"
+    if not summary_path.is_file():
+        return None
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    if (
+        summary.get("index") != index
+        or summary.get("parameters") != parameters
+        or summary.get("status") not in {"succeeded", "no_trades", "failed"}
+    ):
+        return None
+    return summary
+
+
 def _run_sweep(module, base_context, folder, dataset, execute=None):
     values = getattr(module, "SWEEP_PARAMETER_SETS", None)
     if not isinstance(values, Sequence) or isinstance(values, (str, bytes)) or not values:
@@ -293,15 +311,26 @@ def _run_sweep(module, base_context, folder, dataset, execute=None):
         seen.add(fingerprint)
         parameters.append(normalized)
 
-    summaries = []
+    existing = {
+        index: _existing_iteration(folder / "iterations" / str(index), index, parameter_set)
+        for index, parameter_set in enumerate(parameters)
+    }
+    summaries = [summary for summary in existing.values() if summary is not None]
+    summaries.sort(key=lambda summary: summary["index"])
     sweep_started = time.perf_counter()
     combination_durations = []
+    next_index = next((index for index in range(len(parameters)) if existing[index] is None), None)
     _write_progress(
-        folder, completed=0, total=len(parameters), current=1,
+        folder, completed=len(summaries), total=len(parameters),
+        current=next_index + 1 if next_index is not None else None,
         combination_elapsed_seconds=0.0,
         completed_combination_seconds=combination_durations,
     )
+    if summaries:
+        _write_partial_sweep(folder, _sweep_payload(summaries, len(parameters), partial=True))
     for index, parameter_set in enumerate(parameters):
+        if existing[index] is not None:
+            continue
         combination_started = time.perf_counter()
         print(f"Sweep {index + 1}/{len(parameters)} · parameters {json.dumps(parameter_set, sort_keys=True)}", flush=True)
         config = copy.deepcopy(base_context.config)
@@ -345,6 +374,7 @@ def _run_sweep(module, base_context, folder, dataset, execute=None):
             summary = _summary(index, parameter_set, detail)
         _compact_iteration(iteration_folder, summary)
         summaries.append(summary)
+        summaries.sort(key=lambda item: item["index"])
         combination_durations.append(time.perf_counter() - combination_started)
         _write_partial_sweep(folder, _sweep_payload(summaries, len(parameters), partial=True))
         _write_progress(

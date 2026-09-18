@@ -182,7 +182,10 @@ class LocalRunner:
                 (folder / "request.json").write_text(json.dumps(request), encoding="utf-8")
                 timeout = SWEEP_RUN_TIMEOUT if mode == "sweep" else SINGLE_RUN_TIMEOUT
                 self.jobs[identifier] = self._launch(folder, timeout)
-                threading.Thread(target=self._watch, args=(identifier,), daemon=True).start()
+                job = self.jobs[identifier]
+                threading.Thread(
+                    target=self._watch, args=(identifier, job["process"], job["timeout"]), daemon=True
+                ).start()
                 return identifier
             except Exception:
                 shutil.rmtree(folder)
@@ -228,8 +231,30 @@ class LocalRunner:
             self.jobs[new_identifier]["save_history"] = bool(save_history)
             self.jobs[new_identifier]["history_parent_id"] = f"{identifier}s{int(index)}"
             self.jobs[new_identifier]["history_summary"] = ranked_summary
-            threading.Thread(target=self._watch, args=(new_identifier,), daemon=True).start()
+            new_job = self.jobs[new_identifier]
+            threading.Thread(
+                target=self._watch, args=(new_identifier, new_job["process"], new_job["timeout"]), daemon=True
+            ).start()
             return new_identifier
+
+    def resume(self, identifier):
+        """Continue a stopped sweep, retaining its completed compact iterations."""
+        with self.lock:
+            if any(job["status"] == "running" for job in self.jobs.values()):
+                raise ValueError("A backtest is already running. Wait for it or cancel it first.")
+            job = self.jobs[identifier]
+            sweep = self._partial_sweep(job)
+            if job["status"] != "cancelled" or not sweep:
+                raise ValueError("Only a stopped sweep with completed combinations can be resumed.")
+            if sweep.get("processed_count", 0) >= sweep.get("iteration_count", 0):
+                raise ValueError("All combinations are already complete.")
+            job.update(self._launch(job["folder"], SWEEP_RUN_TIMEOUT))
+            for key in ("finished", "error", "result", "history_id", "history_error"):
+                job.pop(key, None)
+            threading.Thread(
+                target=self._watch, args=(identifier, job["process"], job["timeout"]), daemon=True
+            ).start()
+            return identifier
 
     def _history_folder(self, identifier):
         if not identifier or not identifier.isascii() or not identifier.isalnum():
@@ -360,20 +385,26 @@ class LocalRunner:
                 os.killpg(process.pid, signal.SIGKILL)
             process.wait(timeout=10)
 
-    def _watch(self, identifier):
-        job = self.jobs[identifier]
+    def _watch(self, identifier, process, timeout):
+        timed_out = False
         try:
-            job["process"].wait(timeout=job["timeout"])
+            process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            self._stop(job)
-            if job["timeout"] == SWEEP_RUN_TIMEOUT:
-                job["error"] = "Sweep exceeded the 7-day limit. Reduce the combinations or dataset and retry."
-            else:
-                job["error"] = "Backtest exceeded the 30-minute limit. Reduce the date range and retry."
+            timed_out = True
+            self._stop({"process": process})
         with self.lock:
-            job["finished"] = time.monotonic()
+            job = self.jobs.get(identifier)
+            if job is None or job.get("process") is not process:
+                return
+            if process.returncode is None:
+                return
             if job["status"] == "cancelled":
                 return
+            if timed_out and timeout == SWEEP_RUN_TIMEOUT:
+                job["error"] = "Sweep exceeded the 7-day limit. Reduce the combinations or dataset and retry."
+            elif timed_out:
+                job["error"] = "Backtest exceeded the 30-minute limit. Reduce the date range and retry."
+            job["finished"] = time.monotonic()
             result_path = job["folder"] / "result.json"
             try:
                 result = json.loads(result_path.read_text(encoding="utf-8")) if result_path.exists() else {}

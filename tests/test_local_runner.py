@@ -509,7 +509,7 @@ def run_strategy(context):
             "import csv", "import csv\nimport time"
         ).replace(
             'scale = context.config["parameters"]["take_profit"]',
-            'scale = context.config["parameters"]["take_profit"]\n    if scale == .6: time.sleep(10)',
+            'scale = context.config["parameters"]["take_profit"]\n    if scale == .6: time.sleep(2)',
         )
         identifier = self.start(source)
         deadline = time.monotonic() + 10
@@ -532,6 +532,13 @@ def run_strategy(context):
         self.assertEqual(partial["recommended_index"], 0)
         self.assertEqual(partial["iterations"][0]["parameters"], {"take_profit": .4})
         self.assertEqual(self.runner.iteration(identifier, 0)["status"], "succeeded")
+
+        self.assertEqual(self.runner.resume(identifier), identifier)
+        resumed = self.finish(identifier)
+        self.assertEqual(resumed["status"], "succeeded", resumed)
+        self.assertEqual(resumed["result"]["sweep"]["processed_count"], 4)
+        self.assertEqual(len(resumed["result"]["sweep"]["iterations"]), 4)
+        self.assertEqual(resumed["result"]["sweep"]["recommended_index"], 3)
 
         selected = self.finish(self.runner.start_iteration(identifier, 0))
         self.assertEqual(selected["status"], "succeeded", selected)

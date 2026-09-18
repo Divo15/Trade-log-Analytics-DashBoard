@@ -318,6 +318,9 @@ function renderSweep(sweep, id, {partial = false} = {}) {
   $("viewSelectedSweep").disabled = true;
   const processed = sweep.processed_count ?? sweep.iterations.length;
   $("sweepCount").textContent = partial ? `${processed} of ${sweep.iteration_count} complete` : `${sweep.iteration_count} variations`;
+  $("resumeSweepButton").hidden = !partial || processed >= sweep.iteration_count;
+  $("resumeSweepButton").disabled = false;
+  $("resumeSweepButton").textContent = "Resume remaining";
   $("sweepDescription").textContent = partial
     ? "This sweep was stopped. These are the combinations completed before it stopped; unfinished combinations are not shown."
     : "Each row is an independent backtest against the same dataset and dates. Review the results before choosing a full analytics run.";
@@ -394,6 +397,34 @@ $("viewSelectedSweep").addEventListener("click", () => {
       $("viewSelectedSweep"),
       false,
     );
+  }
+});
+
+$("resumeSweepButton").addEventListener("click", async () => {
+  if (!sweepRun || state.uploading) return;
+  const button = $("resumeSweepButton");
+  button.disabled = true;
+  button.textContent = "Resuming…";
+  try {
+    const response = await fetch(`/api/backtests/${sweepRun}/resume`, {
+      method: "POST", headers: {"X-Local-Runner": "1"}
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Could not resume this sweep.");
+    activeRun = result.id;
+    sessionStorage.setItem("activeBacktest", activeRun);
+    busyRun(true);
+    $("sweepPanel").hidden = true;
+    $("runnerPanel").hidden = false;
+    $("runStatus").textContent = "Resuming the unfinished sweep combinations…";
+    $("runLog").textContent = "";
+    $("runLogPanel").hidden = false;
+    $("runnerPanel").scrollIntoView();
+    await pollRun();
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "Resume remaining";
+    $("sweepNote").textContent = error.message;
   }
 });
 

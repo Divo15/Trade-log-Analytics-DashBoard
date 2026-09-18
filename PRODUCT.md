@@ -28,7 +28,9 @@ row retains compact metrics only. The chosen combination is rerun to create and 
 artifacts. Only the automatically recommended winner is added to persistent
 history; opening a manual override does not add another history entry. Users can
 stop a running sweep and review every completed combination; unfinished work is
-discarded and completed rows remain available for a full analytics rerun.
+paused until the user resumes the same sweep. Completed rows remain available
+for a full analytics rerun, and a resumed sweep runs only the unfinished
+combinations before ranking the complete set.
 
 ## Brand Personality
 
