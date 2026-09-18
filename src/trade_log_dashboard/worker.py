@@ -20,12 +20,14 @@ from trade_log_dashboard.legacy import supports_protected_straddle, run_protecte
 
 
 SELECTION_WEIGHTS = {
-    "net_pnl": 0.35,
-    "drawdown": 0.35,
-    "average_win_loss_ratio": 0.15,
+    "net_pnl": 0.25,
+    "recent_year_pnl": 0.25,
+    "drawdown": 0.25,
+    "average_win_loss_ratio": 0.10,
     "win_rate": 0.10,
     "max_consecutive_losses": 0.05,
 }
+RECENT_YEAR_DECAY = 0.60
 
 
 def _write_progress(folder, *, completed, total, current=None, mode="sweep",
@@ -102,6 +104,10 @@ def _summary(index, parameters, detail):
         return {"index": index, "parameters": parameters, "status": "no_trades", "metrics": None}
     analysis = detail["analysis"]
     overview, stats = analysis["overview"], analysis["statistics"]
+    yearly_net_pnl = {}
+    for row in analysis["daily"]:
+        year = str(row["day"])[:4]
+        yearly_net_pnl[year] = yearly_net_pnl.get(year, 0.0) + float(row["net_pnl"])
     return {
         "index": index,
         "parameters": parameters,
@@ -109,6 +115,9 @@ def _summary(index, parameters, detail):
         "has_equity": detail["has_equity"],
         "metrics": {
             "net_pnl": overview["net_pnl"],
+            "yearly_net_pnl": {
+                year: yearly_net_pnl[year] for year in sorted(yearly_net_pnl)
+            },
             "max_drawdown": stats["max_drawdown"],
             "intraday_drawdown": analysis.get("intraday", {}).get("max_drawdown"),
             "win_rate": stats["win_rate"],
@@ -133,7 +142,7 @@ def _percentile(values, value, *, higher_is_better=True):
 
 
 def _rank_sweep(summaries):
-    """Score profitable combinations with transparent, relative components."""
+    """Score profitable combinations with transparent, recency-aware components."""
     eligible = [
         item for item in summaries
         if item.get("metrics") and float(item["metrics"]["net_pnl"]) > 0
@@ -142,6 +151,25 @@ def _rank_sweep(summaries):
         return None
 
     pnl_values = [float(item["metrics"]["net_pnl"]) for item in eligible]
+    recent_years = sorted(
+        {
+            str(year)
+            for item in eligible
+            for year in item["metrics"].get("yearly_net_pnl", {})
+        },
+        reverse=True,
+    )
+    year_weights = {
+        year: RECENT_YEAR_DECAY ** offset
+        for offset, year in enumerate(recent_years)
+    }
+    yearly_values = {
+        year: [
+            float(item["metrics"].get("yearly_net_pnl", {}).get(year, 0.0))
+            for item in eligible
+        ]
+        for year in recent_years
+    }
     drawdown_values = []
     streak_values = []
     finite_ratios = []
@@ -163,7 +191,9 @@ def _rank_sweep(summaries):
         if ratio is not None:
             finite_ratios.append(ratio)
 
-    for item, drawdown, streak in zip(eligible, drawdown_values, streak_values):
+    for position, (item, drawdown, streak) in enumerate(
+        zip(eligible, drawdown_values, streak_values)
+    ):
         metrics = item["metrics"]
         ratio = metrics["average_win_loss_ratio"]
         ratio_component = (
@@ -171,8 +201,17 @@ def _rank_sweep(summaries):
             else _percentile(finite_ratios, ratio) if ratio is not None
             else 0.0
         )
+        recent_year_component = 50.0
+        if recent_years:
+            weighted_year_percentiles = [
+                _percentile(yearly_values[year], yearly_values[year][position])
+                * year_weights[year]
+                for year in recent_years
+            ]
+            recent_year_component = sum(weighted_year_percentiles) / sum(year_weights.values())
         components = {
             "net_pnl": _percentile(pnl_values, float(metrics["net_pnl"])),
+            "recent_year_pnl": recent_year_component,
             "drawdown": _percentile(drawdown_values, drawdown, higher_is_better=False),
             "average_win_loss_ratio": ratio_component,
             "win_rate": max(0.0, min(100.0, float(metrics["win_rate"]))),
@@ -307,6 +346,7 @@ def _run_sweep(module, base_context, folder, dataset, execute=None):
             "failed_count": sum(item["status"] == "failed" for item in summaries),
             "recommended_index": recommended_index,
             "selection_weights": SELECTION_WEIGHTS,
+            "recent_year_decay": RECENT_YEAR_DECAY,
             "iterations": summaries,
         },
     }

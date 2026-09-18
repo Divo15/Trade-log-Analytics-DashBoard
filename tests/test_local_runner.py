@@ -271,10 +271,15 @@ def run_strategy(context):
         self.assertEqual(len(iterations), 4)
         self.assertEqual([row["parameters"]["take_profit"] for row in iterations], [.4, .6, .8, 1.0])
         self.assertEqual([row["metrics"]["net_pnl"] for row in iterations], [4, 6, 8, 10])
+        self.assertEqual(
+            [row["metrics"]["yearly_net_pnl"] for row in iterations],
+            [{"2026": value} for value in [4, 6, 8, 10]],
+        )
         self.assertEqual([row["metrics"]["max_consecutive_losses"] for row in iterations], [0, 0, 0, 0])
         self.assertEqual([row["metrics"]["average_profit"] for row in iterations], [4, 6, 8, 10])
         self.assertEqual([row["metrics"]["average_loss"] for row in iterations], [None, None, None, None])
         self.assertEqual(result["result"]["sweep"]["recommended_index"], 3)
+        self.assertEqual(result["result"]["sweep"]["recent_year_decay"], .6)
         self.assertEqual(iterations[3]["rank"], 1)
         self.assertGreater(iterations[3]["metrics"]["selection_score"],
                            iterations[0]["metrics"]["selection_score"])
@@ -370,17 +375,20 @@ def run_strategy(context):
         self.assertFalse((self.market / "history" / "saved0").exists())
         self.assertTrue((self.market / "history" / f"saved{MAX_SAVED_HISTORY}").exists())
 
-    def test_selection_weights_prioritize_pnl_and_low_drawdown(self):
-        self.assertEqual(SELECTION_WEIGHTS["net_pnl"], .35)
-        self.assertEqual(SELECTION_WEIGHTS["drawdown"], .35)
+    def test_selection_weights_include_recent_year_performance(self):
+        self.assertEqual(SELECTION_WEIGHTS["net_pnl"], .25)
+        self.assertEqual(SELECTION_WEIGHTS["recent_year_pnl"], .25)
+        self.assertEqual(SELECTION_WEIGHTS["drawdown"], .25)
+        self.assertAlmostEqual(sum(SELECTION_WEIGHTS.values()), 1.0)
 
-        def row(index, pnl, drawdown, ratio, win_rate, streak):
+        def row(index, pnl, drawdown, ratio, win_rate, streak, yearly=None):
             return {
                 "index": index,
                 "status": "succeeded",
                 "parameters": {"value": index},
                 "metrics": {
                     "net_pnl": pnl,
+                    "yearly_net_pnl": yearly or {"2025": pnl * .4, "2026": pnl * .6},
                     "max_drawdown": drawdown,
                     "intraday_drawdown": None,
                     "win_rate": win_rate,
@@ -393,14 +401,46 @@ def run_strategy(context):
             }
 
         rows = [
-            row(0, 1000, -500, 2, 60, 3),
-            row(1, 800, -100, 3, 65, 2),
-            row(2, 200, -50, 1, 40, 5),
+            row(0, 1000, -500, 2, 60, 3, {"2025": 900, "2026": 100}),
+            row(1, 800, -100, 3, 65, 2, {"2025": 100, "2026": 700}),
+            row(2, 200, -50, 1, 40, 5, {"2025": 100, "2026": 100}),
             row(3, -100, -10, 5, 90, 1),
         ]
         self.assertEqual(_rank_sweep(rows), 1)
         self.assertEqual(rows[1]["rank"], 1)
         self.assertNotIn("rank", rows[3])
+
+    def test_latest_year_pnl_has_priority_over_older_year_pnl(self):
+        def row(index, yearly):
+            return {
+                "index": index,
+                "status": "succeeded",
+                "parameters": {"value": index},
+                "metrics": {
+                    "net_pnl": 100,
+                    "yearly_net_pnl": yearly,
+                    "max_drawdown": -20,
+                    "intraday_drawdown": None,
+                    "win_rate": 60,
+                    "profit_factor": 2,
+                    "max_consecutive_losses": 2,
+                    "average_profit": 200,
+                    "average_loss": -100,
+                    "batch_count": 20,
+                },
+            }
+
+        rows = [
+            row(0, {"2025": 20, "2026": 80}),
+            row(1, {"2025": 80, "2026": 20}),
+        ]
+
+        self.assertEqual(_rank_sweep(rows), 0)
+        self.assertEqual(rows[0]["rank"], 1)
+        self.assertGreater(
+            rows[0]["metrics"]["selection_components"]["recent_year_pnl"],
+            rows[1]["metrics"]["selection_components"]["recent_year_pnl"],
+        )
 
     def test_sweep_runs_more_than_five_hundred_combinations(self):
         source = '''
