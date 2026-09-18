@@ -9,7 +9,7 @@ import zipfile
 from unittest.mock import patch
 
 from trade_log_dashboard.runner import LocalRunner, MAX_SAVED_HISTORY, SWEEP_RUN_TIMEOUT, extract_market_data
-from trade_log_dashboard.worker import SELECTION_WEIGHTS, _rank_sweep
+from trade_log_dashboard.worker import QUARTILE_POINTS, SELECTION_METRICS, _rank_sweep
 
 STRATEGY = '''
 import csv
@@ -375,11 +375,12 @@ def run_strategy(context):
         self.assertFalse((self.market / "history" / "saved0").exists())
         self.assertTrue((self.market / "history" / f"saved{MAX_SAVED_HISTORY}").exists())
 
-    def test_selection_weights_include_recent_year_performance(self):
-        self.assertEqual(SELECTION_WEIGHTS["net_pnl"], .25)
-        self.assertEqual(SELECTION_WEIGHTS["recent_year_pnl"], .25)
-        self.assertEqual(SELECTION_WEIGHTS["drawdown"], .25)
-        self.assertAlmostEqual(sum(SELECTION_WEIGHTS.values()), 1.0)
+    def test_quartile_score_uses_all_selection_metrics(self):
+        self.assertEqual(QUARTILE_POINTS, (3, 2, -2, -3))
+        self.assertEqual(SELECTION_METRICS, (
+            "net_pnl", "recent_year_pnl", "drawdown", "average_win_loss_ratio",
+            "win_rate", "max_consecutive_losses",
+        ))
 
         def row(index, pnl, drawdown, ratio, win_rate, streak, yearly=None):
             return {
@@ -409,6 +410,20 @@ def run_strategy(context):
         self.assertEqual(_rank_sweep(rows), 1)
         self.assertEqual(rows[1]["rank"], 1)
         self.assertNotIn("rank", rows[3])
+
+        bands = [
+            row(10, 400, -10, 4, 80, 1, {"2026": 400}),
+            row(11, 300, -20, 3, 70, 2, {"2026": 300}),
+            row(12, 200, -30, 2, 60, 3, {"2026": 200}),
+            row(13, 100, -40, 1, 50, 4, {"2026": 100}),
+        ]
+        self.assertEqual(_rank_sweep(bands), 10)
+        for item, points in zip(bands, QUARTILE_POINTS):
+            self.assertEqual(
+                item["metrics"]["selection_components"],
+                {name: points for name in SELECTION_METRICS},
+            )
+            self.assertEqual(item["metrics"]["selection_score"], points * len(SELECTION_METRICS))
 
     def test_latest_year_pnl_has_priority_over_older_year_pnl(self):
         def row(index, yearly):

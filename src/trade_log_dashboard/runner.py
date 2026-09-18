@@ -1,6 +1,6 @@
 """One local backtest at a time, with polling, cancellation and downloadable outputs."""
 import ast
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -73,6 +73,7 @@ class LocalRunner:
         self.storage = tempfile.TemporaryDirectory(prefix="local-backtests-")
         self.history_root = Path(history_root or HISTORY_ROOT).resolve()
         self.history_root.mkdir(parents=True, exist_ok=True)
+        self._last_history_timestamp = None
         self.dataset_root = Path(dataset_root).resolve() if dataset_root else None
         self.dataset_cache_path = Path(dataset_cache_path).resolve() if dataset_cache_path else None
 
@@ -238,6 +239,14 @@ class LocalRunner:
             raise KeyError(identifier)
         return folder
 
+    def _next_history_timestamp(self):
+        """Return a timestamp that preserves save order when saves are very close together."""
+        current = datetime.now(timezone.utc)
+        if self._last_history_timestamp is not None and current <= self._last_history_timestamp:
+            current = self._last_history_timestamp + timedelta(microseconds=1)
+        self._last_history_timestamp = current
+        return current.isoformat()
+
     def _save_history(self, identifier, job):
         result = job.get("result", {})
         analysis = result.get("analysis")
@@ -260,7 +269,7 @@ class LocalRunner:
             )
             metadata = {
                 "id": history_id,
-                "created_at": datetime.now(timezone.utc).isoformat(),
+                "created_at": self._next_history_timestamp(),
                 "strategy": analysis.get("overview", {}).get("strategy", "Strategy"),
                 "dataset": analysis.get("dataset"),
                 "parameters": summary.get("parameters", {}),

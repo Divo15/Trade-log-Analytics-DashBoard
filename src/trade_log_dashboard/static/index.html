@@ -91,7 +91,7 @@
         <div><h1 id="sweepTitle" tabindex="-1">Sweep comparison</h1><p id="sweepDescription">Each row is an independent backtest against the same dataset and dates. Review the results before choosing a full analytics run.</p></div>
         <div class="sweep-heading-actions"><span class="count-badge" id="sweepCount">—</span><button class="primary-button" id="viewSelectedSweep" type="button" disabled>Run selected &amp; view analytics</button></div>
       </div>
-      <div class="sweep-note" id="sweepNote">Recommended score: 25% total P&amp;L, 25% recent-year P&amp;L, 25% lower drawdown, 10% average win/loss ratio, 10% win rate, and 5% fewer consecutive losses. You can override the recommendation.</div>
+      <div class="sweep-note" id="sweepNote">Recommended score: every metric is split into four groups. Top to bottom groups receive +3, +2, −2, and −3 points; lower drawdown and shorter loss streaks score in reverse. You can override the recommendation.</div>
       <div class="table-scroll sweep-table-scroll" tabindex="0" role="region" aria-label="Sweep variation comparison">
         <table>
           <thead id="sweepHead"><tr><th>Select</th><th>Rank</th><th>Combination</th><th>Parameters</th><th class="numeric">Score</th><th class="numeric">Net P&amp;L</th><th>Recent P&amp;L</th><th class="numeric">Max drawdown</th><th class="numeric">Win rate</th><th class="numeric">Max consecutive losses</th><th class="numeric">Average profit</th><th class="numeric">Average loss</th><th class="numeric">Avg win/loss</th><th class="numeric">Profit factor</th><th class="numeric">Trades</th><th><span class="sr-only">Action</span></th></tr></thead>

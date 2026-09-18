@@ -19,14 +19,15 @@ from trade_log_dashboard.equity import analyze_equity
 from trade_log_dashboard.legacy import supports_protected_straddle, run_protected_straddle
 
 
-SELECTION_WEIGHTS = {
-    "net_pnl": 0.25,
-    "recent_year_pnl": 0.25,
-    "drawdown": 0.25,
-    "average_win_loss_ratio": 0.10,
-    "win_rate": 0.10,
-    "max_consecutive_losses": 0.05,
-}
+SELECTION_METRICS = (
+    "net_pnl",
+    "recent_year_pnl",
+    "drawdown",
+    "average_win_loss_ratio",
+    "win_rate",
+    "max_consecutive_losses",
+)
+QUARTILE_POINTS = (3, 2, -2, -3)
 RECENT_YEAR_DECAY = 0.60
 
 
@@ -132,17 +133,24 @@ def _summary(index, parameters, detail):
     }
 
 
-def _percentile(values, value, *, higher_is_better=True):
-    if len(values) == 1:
-        return 100.0
-    below = sum(item < value for item in values)
-    equal = sum(item == value for item in values)
-    percentile = 100.0 * (below + (equal - 1) / 2) / (len(values) - 1)
-    return percentile if higher_is_better else 100.0 - percentile
+def _quartile_scores(values, *, higher_is_better=True):
+    """Give every value one of four transparent, rank-based point bands.
+
+    Identical values receive identical points. If every value is identical, the
+    metric is neutral because it cannot distinguish between combinations.
+    """
+    if len(set(values)) <= 1:
+        return {value: 0 for value in values}
+    ordered = sorted(set(values), reverse=higher_is_better)
+    positions = {value: index for index, value in enumerate(ordered)}
+    return {
+        value: QUARTILE_POINTS[min(3, positions[value] * 4 // len(ordered))]
+        for value in ordered
+    }
 
 
 def _rank_sweep(summaries):
-    """Score profitable combinations with transparent, recency-aware components."""
+    """Score profitable combinations using four equal, transparent point bands."""
     eligible = [
         item for item in summaries
         if item.get("metrics") and float(item["metrics"]["net_pnl"]) > 0
@@ -150,7 +158,6 @@ def _rank_sweep(summaries):
     if not eligible:
         return None
 
-    pnl_values = [float(item["metrics"]["net_pnl"]) for item in eligible]
     recent_years = sorted(
         {
             str(year)
@@ -163,68 +170,52 @@ def _rank_sweep(summaries):
         year: RECENT_YEAR_DECAY ** offset
         for offset, year in enumerate(recent_years)
     }
-    yearly_values = {
-        year: [
-            float(item["metrics"].get("yearly_net_pnl", {}).get(year, 0.0))
-            for item in eligible
-        ]
-        for year in recent_years
-    }
-    drawdown_values = []
-    streak_values = []
-    finite_ratios = []
+    metric_values = {name: [] for name in SELECTION_METRICS}
     for item in eligible:
         metrics = item["metrics"]
         drawdown = metrics["intraday_drawdown"]
         if drawdown is None:
             drawdown = metrics["max_drawdown"]
         magnitude = abs(min(0.0, float(drawdown)))
-        drawdown_values.append(magnitude)
-        streak_values.append(int(metrics["max_consecutive_losses"]))
         average_profit, average_loss = metrics["average_profit"], metrics["average_loss"]
         ratio = (
             float(average_profit) / abs(float(average_loss))
             if average_profit is not None and average_loss not in {None, 0}
-            else None
-        )
-        metrics["average_win_loss_ratio"] = ratio
-        if ratio is not None:
-            finite_ratios.append(ratio)
-
-    for position, (item, drawdown, streak) in enumerate(
-        zip(eligible, drawdown_values, streak_values)
-    ):
-        metrics = item["metrics"]
-        ratio = metrics["average_win_loss_ratio"]
-        ratio_component = (
-            100.0 if ratio is None and metrics["average_profit"] is not None
-            else _percentile(finite_ratios, ratio) if ratio is not None
+            else float("inf") if average_profit is not None
             else 0.0
         )
-        recent_year_component = 50.0
-        if recent_years:
-            weighted_year_percentiles = [
-                _percentile(yearly_values[year], yearly_values[year][position])
-                * year_weights[year]
+        metrics["average_win_loss_ratio"] = ratio if ratio != float("inf") else None
+        recent_year_pnl = (
+            sum(
+                float(metrics.get("yearly_net_pnl", {}).get(year, 0.0)) * year_weights[year]
                 for year in recent_years
-            ]
-            recent_year_component = sum(weighted_year_percentiles) / sum(year_weights.values())
+            ) / sum(year_weights.values())
+            if recent_years else 0.0
+        )
+        metric_values["net_pnl"].append(float(metrics["net_pnl"]))
+        metric_values["recent_year_pnl"].append(recent_year_pnl)
+        metric_values["drawdown"].append(magnitude)
+        metric_values["average_win_loss_ratio"].append(ratio)
+        metric_values["win_rate"].append(max(0.0, min(100.0, float(metrics["win_rate"]))))
+        metric_values["max_consecutive_losses"].append(int(metrics["max_consecutive_losses"]))
+
+    point_bands = {
+        name: _quartile_scores(
+            values,
+            higher_is_better=name not in {"drawdown", "max_consecutive_losses"},
+        )
+        for name, values in metric_values.items()
+    }
+    for position, item in enumerate(eligible):
+        metrics = item["metrics"]
         components = {
-            "net_pnl": _percentile(pnl_values, float(metrics["net_pnl"])),
-            "recent_year_pnl": recent_year_component,
-            "drawdown": _percentile(drawdown_values, drawdown, higher_is_better=False),
-            "average_win_loss_ratio": ratio_component,
-            "win_rate": max(0.0, min(100.0, float(metrics["win_rate"]))),
-            "max_consecutive_losses": _percentile(
-                streak_values, streak, higher_is_better=False
-            ),
+            name: point_bands[name][metric_values[name][position]]
+            for name in SELECTION_METRICS
         }
         metrics["selection_components"] = {
-            name: round(value, 2) for name, value in components.items()
+            name: int(value) for name, value in components.items()
         }
-        metrics["selection_score"] = round(sum(
-            components[name] * SELECTION_WEIGHTS[name] for name in SELECTION_WEIGHTS
-        ), 2)
+        metrics["selection_score"] = sum(components.values())
 
     ranked = sorted(
         eligible,
@@ -345,7 +336,8 @@ def _run_sweep(module, base_context, folder, dataset, execute=None):
             "no_trade_count": sum(item["status"] == "no_trades" for item in summaries),
             "failed_count": sum(item["status"] == "failed" for item in summaries),
             "recommended_index": recommended_index,
-            "selection_weights": SELECTION_WEIGHTS,
+            "selection_metrics": SELECTION_METRICS,
+            "quartile_points": QUARTILE_POINTS,
             "recent_year_decay": RECENT_YEAR_DECAY,
             "iterations": summaries,
         },
