@@ -15,7 +15,9 @@ output/
 outputs/
 uploads/
 history/
-data/db/
+data/db/*
+!data/db/sensex current week/
+!data/db/sensex current week/**
 data/db.previous-*/
 *.duckdb
 *.manifest.json

@@ -9,9 +9,9 @@ datasets, and backtest execution all run on the teammate's own computer.
 This repository is private. Each teammate must first be invited to it on GitHub,
 then clone it through Codex or Git.
 
-The market dataset is deliberately excluded from Git. Give each teammate a copy
-of the dataset folder through your approved shared drive, external disk, or other
-team file-sharing method. Keep its contents unchanged.
+The SENSEX current-week dataset is included through Git LFS. NIFTY datasets remain
+excluded from Git and must be copied separately through your approved shared drive,
+external disk, or other team file-sharing method. Keep their contents unchanged.
 
 In Codex, a teammate can use this prompt after cloning the repository:
 
@@ -25,6 +25,8 @@ For manual setup on Windows, install Python 3.11, 3.12, or 3.13, then run from
 the project folder:
 
 ```bat
+git lfs install
+git lfs pull
 setup_environment.cmd
 start_dashboard.cmd
 ```
@@ -115,9 +117,10 @@ server session. Only each sweep's recommended winner is kept permanently, with
 its analytics and downloadable trade/equity outputs.
 Active runs reconnect after a browser refresh. No market data is downloaded.
 
-The local `data/db` copy is excluded from Git. The downloaded source archive is
-preserved. Python caches and DuckDB scratch directories were excluded from the
-copy. Weekly, Next Weekly, Next2Week and Monthly are available for NIFTY. SENSEX
+Local NIFTY data under `data/db` is excluded from Git. The SENSEX current-week
+summary and chain are versioned through Git LFS and become available after
+`git lfs pull`. Python caches and DuckDB scratch directories are excluded.
+Weekly, Next Weekly, Next2Week and Monthly are available for NIFTY. SENSEX
 current-week data appears when `sensex current week/sensex_summary.parquet` and
 `sensex current week/sensex_chain/*.parquet` are present. Stock-options data is
 also saved, but uses a different layout and is not

@@ -1,0 +1,93 @@
+{
+  "source_root": "G:\\BSEFO Data\\BSX",
+  "source_files": 533,
+  "trading_dates": 533,
+  "date_min": "2024-01-01",
+  "date_max": "2026-05-05",
+  "summary_rows": 198573,
+  "chain_rows": 8141493,
+  "dte_counts": [
+    [
+      0,
+      42366
+    ],
+    [
+      1,
+      40122
+    ],
+    [
+      2,
+      25933
+    ],
+    [
+      3,
+      27353
+    ],
+    [
+      4,
+      25445
+    ],
+    [
+      5,
+      13222
+    ],
+    [
+      6,
+      23699
+    ],
+    [
+      7,
+      433
+    ]
+  ],
+  "issues": {
+    "missing_chain_ce": 1939437,
+    "missing_chain_pe": 1972847,
+    "missing_rounded_atm": 63,
+    "missing_synth_straddle": 1,
+    "no_common_priced_strike": 72
+  },
+  "source_limitations": {
+    "actual_futures_bars": "absent from raw pickles",
+    "future_ohlc": "put-call-parity proxy at inferred ATM",
+    "future_volume": null,
+    "future_oi": null,
+    "future_vwap": "expanding time-weighted typical-price proxy; underlying volume absent"
+  },
+  "summary_columns": [
+    "datetime",
+    "future_open",
+    "future_high",
+    "future_low",
+    "future_close",
+    "future_volume",
+    "future_vwap",
+    "synth_future_open",
+    "future_atm",
+    "synth_atm",
+    "straddle_future",
+    "straddle_synth",
+    "pct_coverage",
+    "DTE",
+    "future_oi"
+  ],
+  "chain_columns": [
+    "datetime",
+    "strike",
+    "ce_dist_future",
+    "ce_dist_synth",
+    "pe_dist_future",
+    "pe_dist_synth",
+    "ce_open",
+    "ce_high",
+    "ce_low",
+    "ce_close",
+    "pe_open",
+    "pe_high",
+    "pe_low",
+    "pe_close",
+    "DTE",
+    "ce_oi",
+    "pe_oi"
+  ]
+}
