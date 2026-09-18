@@ -503,6 +503,39 @@ def run_strategy(context):
         self.assertIsNotNone(result["progress"]["average_combination_seconds"])
         self.assertEqual(result["progress"]["estimated_remaining_seconds"], 0)
 
+    def test_cancelled_sweep_keeps_completed_combinations_reviewable(self):
+        source = SWEEP_STRATEGY.replace(
+            "import csv", "import csv\nimport time"
+        ).replace(
+            'scale = context.config["parameters"]["take_profit"]',
+            'scale = context.config["parameters"]["take_profit"]\n    if scale == .6: time.sleep(10)',
+        )
+        identifier = self.start(source)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            progress = self.runner.status(identifier)["progress"]
+            if progress and progress.get("completed") >= 1 and progress.get("current") == 2:
+                break
+            time.sleep(.02)
+        else:
+            self.fail("Sweep did not complete its first combination")
+
+        self.runner.cancel(identifier)
+        stopped = self.runner.status(identifier)
+        self.assertEqual(stopped["status"], "cancelled")
+        partial = stopped["partial_sweep"]
+        self.assertEqual(partial["iteration_count"], 4)
+        self.assertEqual(partial["processed_count"], 1)
+        self.assertEqual(partial["completed_count"], 1)
+        self.assertTrue(partial["partial"])
+        self.assertEqual(partial["recommended_index"], 0)
+        self.assertEqual(partial["iterations"][0]["parameters"], {"take_profit": .4})
+        self.assertEqual(self.runner.iteration(identifier, 0)["status"], "succeeded")
+
+        selected = self.finish(self.runner.start_iteration(identifier, 0))
+        self.assertEqual(selected["status"], "succeeded", selected)
+        self.assertEqual(selected["result"]["analysis"]["overview"]["net_pnl"], 4)
+
     def test_failed_sweep_variation_does_not_stop_later_combinations(self):
         source = '''
 STRATEGY_CONTRACT_VERSION = "2"

@@ -244,6 +244,34 @@ def _compact_iteration(iteration_folder, summary):
     )
 
 
+def _sweep_payload(summaries, iteration_count, *, partial=False):
+    recommended_index = _rank_sweep(summaries)
+    return {
+        "iteration_count": iteration_count,
+        "processed_count": len(summaries),
+        "completed_count": sum(item["status"] == "succeeded" for item in summaries),
+        "ranked_count": sum("rank" in item for item in summaries),
+        "no_trade_count": sum(item["status"] == "no_trades" for item in summaries),
+        "failed_count": sum(item["status"] == "failed" for item in summaries),
+        "recommended_index": recommended_index,
+        "selection_metrics": SELECTION_METRICS,
+        "quartile_points": QUARTILE_POINTS,
+        "recent_year_decay": RECENT_YEAR_DECAY,
+        "partial": partial,
+        "iterations": summaries,
+    }
+
+
+def _write_partial_sweep(folder, sweep):
+    """Atomically save completed sweep rows so they remain reviewable after cancellation."""
+    temporary = folder / f"partial-sweep-{uuid4().hex}.tmp"
+    temporary.write_text(json.dumps(sweep, allow_nan=False), encoding="utf-8")
+    try:
+        temporary.replace(folder / "partial-sweep.json")
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _run_sweep(module, base_context, folder, dataset, execute=None):
     values = getattr(module, "SWEEP_PARAMETER_SETS", None)
     if not isinstance(values, Sequence) or isinstance(values, (str, bytes)) or not values:
@@ -316,6 +344,7 @@ def _run_sweep(module, base_context, folder, dataset, execute=None):
         _compact_iteration(iteration_folder, summary)
         summaries.append(summary)
         combination_durations.append(time.perf_counter() - combination_started)
+        _write_partial_sweep(folder, _sweep_payload(summaries, len(parameters), partial=True))
         _write_progress(
             folder,
             completed=index + 1,
@@ -325,22 +354,10 @@ def _run_sweep(module, base_context, folder, dataset, execute=None):
             completed_combination_seconds=combination_durations,
             elapsed_seconds=time.perf_counter() - sweep_started,
         )
-    recommended_index = _rank_sweep(summaries)
     return {
         "status": "succeeded",
         "mode": "sweep",
-        "sweep": {
-            "iteration_count": len(summaries),
-            "completed_count": sum(item["status"] == "succeeded" for item in summaries),
-            "ranked_count": sum("rank" in item for item in summaries),
-            "no_trade_count": sum(item["status"] == "no_trades" for item in summaries),
-            "failed_count": sum(item["status"] == "failed" for item in summaries),
-            "recommended_index": recommended_index,
-            "selection_metrics": SELECTION_METRICS,
-            "quartile_points": QUARTILE_POINTS,
-            "recent_year_decay": RECENT_YEAR_DECAY,
-            "iterations": summaries,
-        },
+        "sweep": _sweep_payload(summaries, len(parameters)),
     }
 
 

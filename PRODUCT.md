@@ -26,7 +26,9 @@ high P&L and low drawdown. The recommended combination is rerun and opened
 automatically; the user can return to the comparison and override it. Each sweep
 row retains compact metrics only. The chosen combination is rerun to create and verify its complete analytics and downloadable
 artifacts. Only the automatically recommended winner is added to persistent
-history; opening a manual override does not add another history entry.
+history; opening a manual override does not add another history entry. Users can
+stop a running sweep and review every completed combination; unfinished work is
+discarded and completed rows remain available for a full analytics rerun.
 
 ## Brand Personality
 

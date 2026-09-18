@@ -194,7 +194,7 @@ class LocalRunner:
             if any(job["status"] == "running" for job in self.jobs.values()):
                 raise ValueError("A backtest is already running. Wait for it or cancel it first.")
             parent = self.jobs[identifier]
-            if parent["status"] != "succeeded" or not str(index).isdigit():
+            if parent["status"] not in {"succeeded", "cancelled"} or not str(index).isdigit():
                 raise ValueError("The optimizer run or selected combination is unavailable.")
             summary_path = parent["folder"] / "iterations" / str(int(index)) / "summary.json"
             if not summary_path.is_file():
@@ -202,7 +202,7 @@ class LocalRunner:
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
             if summary.get("status") != "succeeded" or not summary.get("metrics"):
                 raise ValueError("Choose a combination that completed with trades.")
-            sweep = parent.get("result", {}).get("sweep", {})
+            sweep = parent.get("result", {}).get("sweep", {}) or self._partial_sweep(parent) or {}
             ranked_summary = next(
                 (item for item in sweep.get("iterations", []) if item.get("index") == int(index)),
                 summary,
@@ -238,6 +238,16 @@ class LocalRunner:
         if not folder.is_relative_to(self.history_root):
             raise KeyError(identifier)
         return folder
+
+    @staticmethod
+    def _partial_sweep(job):
+        path = job["folder"] / "partial-sweep.json"
+        if not path.is_file():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return None
 
     def _next_history_timestamp(self):
         """Return a timestamp that preserves save order when saves are very close together."""
@@ -438,10 +448,12 @@ class LocalRunner:
                         )
                 except (OSError, ValueError, TypeError):
                     progress = None
+            partial_sweep = self._partial_sweep(job) if job["status"] == "cancelled" else None
             return dict(id=identifier, status=job["status"], elapsed_seconds=elapsed, progress=progress,
                         log=log, error=job.get("error") if job["status"] == "failed" else None,
                         history_id=job.get("history_id"), history_error=job.get("history_error"),
-                        result=job.get("result") if job["status"] in {"succeeded", "empty"} else None)
+                        result=job.get("result") if job["status"] in {"succeeded", "empty"} else None,
+                        partial_sweep=partial_sweep)
 
     def cancel(self, identifier):
         with self.lock:
@@ -464,7 +476,7 @@ class LocalRunner:
 
     def iteration(self, identifier, index):
         job = self.jobs[identifier]
-        if job["status"] != "succeeded" or not str(index).isdigit():
+        if job["status"] not in {"succeeded", "cancelled"} or not str(index).isdigit():
             raise KeyError(index)
         path = job["folder"] / "iterations" / str(int(index)) / "summary.json"
         if not path.is_file():

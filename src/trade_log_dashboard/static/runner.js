@@ -176,6 +176,7 @@ $("strategyFiles").addEventListener("change", () => {
 function busyRun(busy) {
   state.uploading = busy;
   for (const id of ["runButton", "csvModeButton", "chooseButton", "replaceButton", "equityButton", "historyButton", "storageButton"]) $(id).disabled = busy;
+  if (busy) $("cancelRun").textContent = "Cancel run";
   $("cancelRun").hidden = !busy || !activeRun;
   $("runForm").setAttribute("aria-busy", String(busy));
 }
@@ -310,13 +311,18 @@ async function openSweepIteration(index, button, saveHistory = false) {
   }
 }
 
-function renderSweep(sweep, id) {
+function renderSweep(sweep, id, {partial = false} = {}) {
   sweepRun = id;
   selectedSweepIndex = null;
   recommendedSweepIndex = sweep.recommended_index;
   $("viewSelectedSweep").disabled = true;
-  $("sweepCount").textContent = `${sweep.iteration_count} variations`;
-  $("sweepNote").textContent = `${number.format(sweep.ranked_count || 0)} profitable candidates ranked · ${number.format(sweep.no_trade_count || 0)} without trades · ${number.format(sweep.failed_count || 0)} failed. Each metric is split into four groups: +3, +2, −2, and −3 points from best to worst. Drawdown and loss streak run in reverse, so lower values earn more points. Recent yearly P&L still gives newer years more weight. Review the comparison, then run any combination for full analytics or save it to history.`;
+  const processed = sweep.processed_count ?? sweep.iterations.length;
+  $("sweepCount").textContent = partial ? `${processed} of ${sweep.iteration_count} complete` : `${sweep.iteration_count} variations`;
+  $("sweepDescription").textContent = partial
+    ? "This sweep was stopped. These are the combinations completed before it stopped; unfinished combinations are not shown."
+    : "Each row is an independent backtest against the same dataset and dates. Review the results before choosing a full analytics run.";
+  const partialPrefix = partial ? `Stopped after ${number.format(processed)} of ${number.format(sweep.iteration_count)} combinations. ` : "";
+  $("sweepNote").textContent = `${partialPrefix}${number.format(sweep.ranked_count || 0)} profitable candidates ranked · ${number.format(sweep.no_trade_count || 0)} without trades · ${number.format(sweep.failed_count || 0)} failed. Each metric is split into four groups: +3, +2, −2, and −3 points from best to worst. Drawdown and loss streak run in reverse, so lower values earn more points. Recent yearly P&L still gives newer years more weight. Review the comparison, then run any combination for full analytics or save it to history.`;
   const parameterKeys = [...new Set(sweep.iterations.flatMap(item => Object.keys(item.parameters || {})))];
   $("sweepHead").innerHTML = `<tr><th>Select</th><th>Rank</th><th>Combination</th>${parameterKeys.map(key => `<th>${escapeHtml(key)}</th>`).join("")}<th class="numeric">Score</th><th class="numeric">Net P&amp;L</th><th>Recent P&amp;L</th><th class="numeric">Max drawdown</th><th class="numeric">Win rate</th><th class="numeric">Max consecutive losses</th><th class="numeric">Average profit</th><th class="numeric">Average loss</th><th class="numeric">Avg win/loss</th><th class="numeric">Profit factor</th><th class="numeric">Trades</th><th><span class="sr-only">Action</span></th></tr>`;
   const rankedRows = [...sweep.iterations].sort((left, right) =>
@@ -456,6 +462,7 @@ async function pollRun() {
     $("runLog").textContent = job.log;
     showBacktestTimer(job.elapsed_seconds, job.status === "running");
     if (job.progress?.mode === "sweep") {
+      $("cancelRun").textContent = "Stop & review completed";
       const progress = job.progress;
       const current = progress.current;
       const currentElapsed = Number(progress.combination_elapsed_seconds || 0)
@@ -530,6 +537,14 @@ async function pollRun() {
       }
       if (job.history_id) $("runMeta").textContent += " · Saved to history";
       if (job.history_error) $("runStatus").textContent = job.history_error;
+    } else if (job.status === "cancelled" && job.partial_sweep?.iterations?.length) {
+      renderSweep(job.partial_sweep, id, {partial: true});
+      activeRun = null;
+      sessionStorage.removeItem("activeBacktest");
+      busyRun(false);
+      return;
+    } else if (job.status === "cancelled") {
+      $("runStatus").textContent = "Sweep stopped before a combination completed.";
     } else if (job.status === "empty") {
       $("runStatus").textContent = job.result.message;
       downloads(id, false);
@@ -591,7 +606,9 @@ $("runForm").addEventListener("submit", async event => {
 $("cancelRun").addEventListener("click", async () => {
   if (!activeRun) return;
   stopBacktestTimer();
-  $("runStatus").textContent = "Cancelling backtest…";
+  $("runStatus").textContent = $("cancelRun").textContent === "Stop & review completed"
+    ? "Stopping sweep and preparing completed combinations…"
+    : "Cancelling backtest…";
   try {
     const response = await fetch(`/api/backtests/${activeRun}/cancel`, {method:"POST", headers:{"X-Local-Runner":"1"}});
     if (!response.ok) throw new Error("Could not cancel the run. Check that the local server is running.");
