@@ -87,6 +87,8 @@ def _execute_result(result, context, output_folder, dataset):
     print(f"Validating and analysing {receipt.row_count} completed legs…", flush=True)
     analysis = analyze_trade_log(receipt.output_path, validated_receipt=receipt)
     analysis["dataset"] = dataset or {"id": None, "label": "Custom data"}
+    parameters = context.config.get("parameters", {})
+    analysis["parameters"] = dict(parameters) if isinstance(parameters, Mapping) else {}
     has_equity = result.get("equity_snapshots") is not None
     if has_equity:
         equity_path = export_equity_snapshots(

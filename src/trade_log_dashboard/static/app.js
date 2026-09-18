@@ -96,13 +96,21 @@ function yearlyFromDaily(rows) {
     .sort((a, b) => a.year.localeCompare(b.year));
 }
 
-function render(data) {
+function parameterSummary(parameters) {
+  const entries = Object.entries(parameters || {});
+  return entries.map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(" · ");
+}
+
+function render(data, parameters = data.parameters) {
   state.data = data;
   const { overview, statistics: stats, validation, concentration } = data;
   $("strategyTitle").textContent = overview.strategy;
   $("dateRange").textContent = `${shortDate.format(new Date(overview.start_time))} – ${shortDate.format(new Date(overview.end_time))}`;
   $("runMeta").textContent = `${overview.batch_count} batches · ${overview.leg_count} legs · ${overview.symbols} symbols · Run ${overview.run_id}`;
   if (data.dataset) $("runMeta").textContent += ` · Dataset: ${data.dataset.label}`;
+  const parameterText = parameterSummary(parameters);
+  $("runParameters").textContent = parameterText ? `Combination parameters · ${parameterText}` : "";
+  $("runParameters").hidden = !parameterText;
   $("fileName").textContent = state.fileName;
   $("checksum").textContent = `SHA-256 ${validation.sha256.slice(0, 12)}…`;
   $("checksum").title = validation.sha256;

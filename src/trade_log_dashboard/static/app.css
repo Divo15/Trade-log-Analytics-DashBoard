@@ -120,6 +120,7 @@ main { width: min(1320px, calc(100% - 64px)); margin: 0 auto; }
 .status-badge { display: inline-flex; gap: 5px; align-items: center; padding: 4px 9px; color: var(--positive); background: var(--positive-pale); }
 .report-heading h1 { margin: 10px 0 2px; font-size: 1.75rem; line-height: 1.2; letter-spacing: -0.025em; }
 .report-heading p, .source-summary { color: var(--muted); font-size: 12px; }
+.run-parameters { margin: 5px 0 0; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .source-summary { display: flex; flex-direction: column; text-align: right; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 
 .assumption { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; padding: 9px 13px; border: 1px solid oklch(0.86 0.045 80); border-radius: 8px; background: oklch(0.965 0.022 80); color: oklch(0.35 0.045 70); font-size: 12px; }

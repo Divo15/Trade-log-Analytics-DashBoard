@@ -224,7 +224,7 @@ async function openHistory(identifier, button) {
     hideStorage();
     $("sweepPanel").hidden = true;
     $("runnerPanel").hidden = true;
-    render(record.analysis);
+    render(record.analysis, record.parameters);
     if (record.analysis.intraday) renderIntraday(record.analysis.intraday, "saved equity.csv");
     historyDownloads(record);
     $("replaceButton").hidden = true;

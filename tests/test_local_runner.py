@@ -295,6 +295,7 @@ def run_strategy(context):
         selected = self.finish(selected_id)
         self.assertEqual(selected["status"], "succeeded", selected)
         self.assertEqual(selected["result"]["analysis"]["overview"]["net_pnl"], 8)
+        self.assertEqual(selected["result"]["analysis"]["parameters"], {"take_profit": .8})
         self.assertTrue(self.runner.artifact(selected_id, "trades.csv").is_file())
         selected_request = json.loads(
             (self.runner.jobs[selected_id]["folder"] / "request.json").read_text()
