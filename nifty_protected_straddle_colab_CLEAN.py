@@ -252,7 +252,7 @@ def load_cycle_chain(
     end_text = end_ts.strftime("%d/%m/%Y %H:%M:%S")
     return con.execute(
         """
-        select datetime, strike, ce_close, pe_close
+        select datetime, strike, ce_open, ce_close, pe_open, pe_close
         from read_parquet(?)
         where strptime(datetime, '%d/%m/%Y %H:%M:%S')
               between strptime(?, '%d/%m/%Y %H:%M:%S')
@@ -263,11 +263,15 @@ def load_cycle_chain(
 
 
 def option_series(chain: pd.DataFrame, strike: int, side: str) -> pd.DataFrame:
-    col = "ce_close" if side == "CE" else "pe_close"
-    df = chain.loc[chain["strike"] == strike, ["datetime", col]].dropna().copy()
+    prefix = side.lower()
+    columns = [f"{prefix}_open", f"{prefix}_close"]
+    df = chain.loc[chain["strike"] == strike, ["datetime", *columns]].dropna().copy()
     df["ts"] = pd.to_datetime(df["datetime"], format="%d/%m/%Y %H:%M:%S")
     df = df.sort_values("ts").drop_duplicates("ts", keep="first")
-    return df.rename(columns={col: f"{side}_{strike}"})
+    return df.rename(columns={
+        f"{prefix}_open": f"{side}_{strike}_open",
+        f"{prefix}_close": f"{side}_{strike}",
+    })
 
 
 def build_joined_path(
@@ -291,17 +295,15 @@ def build_joined_path(
         series = option_series(chain, strike, side)
         if series.empty:
             return pd.DataFrame()
-        value_col = f"{side}_{strike}"
-        quote_ts_col = f"{value_col}_quote_ts"
-        series = series.rename(columns={"ts": quote_ts_col})
-        joined = pd.merge_asof(
-            joined,
-            series[[quote_ts_col, value_col]].sort_values(quote_ts_col),
-            left_on="ts",
-            right_on=quote_ts_col,
-            direction="forward",
+        close_col = f"{side}_{strike}"
+        open_col = f"{close_col}_open"
+        # Use only the quote recorded for this candle.  Matching a later quote
+        # to an earlier signal is look-ahead bias and can change stop/target
+        # decisions when the option chain is sparse.
+        joined = joined.merge(
+            series[["ts", open_col, close_col]], on="ts", how="inner", validate="one_to_one"
         )
-        joined = joined[joined[value_col].notna()].copy()
+        joined = joined[joined[open_col].notna() & joined[close_col].notna()].copy()
         if joined.empty:
             return joined
 
@@ -780,9 +782,14 @@ def run_backtest(args: SimpleNamespace) -> tuple[pd.DataFrame, pd.DataFrame, pd.
             if long_call <= short_call or long_put >= short_put:
                 break
 
+            # The signal is evaluated from the current completed candle.  Fill
+            # only on the next candle's option open, never on the signal candle.
+            execution_summary = remaining_summary.iloc[1:].copy()
+            if execution_summary.empty:
+                break
             joined = build_joined_path(
                 filtered_chain,
-                remaining_summary[["datetime", "DTE", "future_close", "future_atm", "straddle_future"]].copy(),
+                execution_summary[["datetime", "DTE", "future_close", "future_atm", "straddle_future"]].copy(),
                 short_call,
                 short_put,
                 long_call,
@@ -793,10 +800,10 @@ def run_backtest(args: SimpleNamespace) -> tuple[pd.DataFrame, pd.DataFrame, pd.
 
             entry = joined.iloc[0]
             entry_credit_points = (
-                float(entry[f"CE_{short_call}"]) * (1 - SLIPPAGE)
-                + float(entry[f"PE_{short_put}"]) * (1 - SLIPPAGE)
-                - float(entry[f"CE_{long_call}"]) * (1 + SLIPPAGE)
-                - float(entry[f"PE_{long_put}"]) * (1 + SLIPPAGE)
+                float(entry[f"CE_{short_call}_open"]) * (1 - SLIPPAGE)
+                + float(entry[f"PE_{short_put}_open"]) * (1 - SLIPPAGE)
+                - float(entry[f"CE_{long_call}_open"]) * (1 + SLIPPAGE)
+                - float(entry[f"PE_{long_put}_open"]) * (1 + SLIPPAGE)
             )
             entry_straddle_pct_current = float(current_entry_row["straddle_future"] / current_entry_row["future_close"]) * 100
             if entry_credit_points <= 0:
@@ -932,7 +939,7 @@ def run_backtest(args: SimpleNamespace) -> tuple[pd.DataFrame, pd.DataFrame, pd.
             ]
             for leg_name, option_type, strike, entry_action, exit_action in leg_specs:
                 price_col = f"{option_type}_{strike}"
-                entry_raw = float(entry[price_col])
+                entry_raw = float(entry[f"{price_col}_open"])
                 exit_raw = float(exit_row_data[price_col])
                 if entry_action == "SELL":
                     entry_fill = entry_raw * (1 - SLIPPAGE)
