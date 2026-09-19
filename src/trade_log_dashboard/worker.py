@@ -17,18 +17,7 @@ from trade_log_exporter import export_trade_log, export_equity_snapshots
 from trade_log_dashboard.analytics import analyze_trade_log
 from trade_log_dashboard.equity import analyze_equity
 from trade_log_dashboard.legacy import supports_protected_straddle, run_protected_straddle
-
-
-SELECTION_METRICS = (
-    "net_pnl",
-    "recent_year_pnl",
-    "drawdown",
-    "average_win_loss_ratio",
-    "win_rate",
-    "max_consecutive_losses",
-)
-QUARTILE_POINTS = (3, 2, -2, -3)
-RECENT_YEAR_DECAY = 0.60
+from trade_log_dashboard.sweep import QUARTILE_POINTS, SELECTION_METRICS, rank_sweep, sweep_payload
 
 
 def _write_progress(folder, *, completed, total, current=None, mode="sweep",
@@ -135,106 +124,13 @@ def _summary(index, parameters, detail):
     }
 
 
-def _quartile_scores(values, *, higher_is_better=True):
-    """Give every value one of four transparent, rank-based point bands.
-
-    Identical values receive identical points. If every value is identical, the
-    metric is neutral because it cannot distinguish between combinations.
-    """
-    if len(set(values)) <= 1:
-        return {value: 0 for value in values}
-    ordered = sorted(set(values), reverse=higher_is_better)
-    positions = {value: index for index, value in enumerate(ordered)}
-    return {
-        value: QUARTILE_POINTS[min(3, positions[value] * 4 // len(ordered))]
-        for value in ordered
-    }
-
-
 def _rank_sweep(summaries):
-    """Score profitable combinations using four equal, transparent point bands."""
-    eligible = [
-        item for item in summaries
-        if item.get("metrics") and float(item["metrics"]["net_pnl"]) > 0
-    ]
-    if not eligible:
-        return None
+    """Compatibility wrapper for existing strategy dashboard integrations."""
+    return rank_sweep(summaries)
 
-    recent_years = sorted(
-        {
-            str(year)
-            for item in eligible
-            for year in item["metrics"].get("yearly_net_pnl", {})
-        },
-        reverse=True,
-    )
-    year_weights = {
-        year: RECENT_YEAR_DECAY ** offset
-        for offset, year in enumerate(recent_years)
-    }
-    metric_values = {name: [] for name in SELECTION_METRICS}
-    for item in eligible:
-        metrics = item["metrics"]
-        drawdown = metrics["intraday_drawdown"]
-        if drawdown is None:
-            drawdown = metrics["max_drawdown"]
-        magnitude = abs(min(0.0, float(drawdown)))
-        average_profit, average_loss = metrics["average_profit"], metrics["average_loss"]
-        ratio = (
-            float(average_profit) / abs(float(average_loss))
-            if average_profit is not None and average_loss not in {None, 0}
-            else float("inf") if average_profit is not None
-            else 0.0
-        )
-        metrics["average_win_loss_ratio"] = ratio if ratio != float("inf") else None
-        recent_year_pnl = (
-            sum(
-                float(metrics.get("yearly_net_pnl", {}).get(year, 0.0)) * year_weights[year]
-                for year in recent_years
-            ) / sum(year_weights.values())
-            if recent_years else 0.0
-        )
-        metric_values["net_pnl"].append(float(metrics["net_pnl"]))
-        metric_values["recent_year_pnl"].append(recent_year_pnl)
-        metric_values["drawdown"].append(magnitude)
-        metric_values["average_win_loss_ratio"].append(ratio)
-        metric_values["win_rate"].append(max(0.0, min(100.0, float(metrics["win_rate"]))))
-        metric_values["max_consecutive_losses"].append(int(metrics["max_consecutive_losses"]))
 
-    point_bands = {
-        name: _quartile_scores(
-            values,
-            higher_is_better=name not in {"drawdown", "max_consecutive_losses"},
-        )
-        for name, values in metric_values.items()
-    }
-    for position, item in enumerate(eligible):
-        metrics = item["metrics"]
-        components = {
-            name: point_bands[name][metric_values[name][position]]
-            for name in SELECTION_METRICS
-        }
-        metrics["selection_components"] = {
-            name: int(value) for name, value in components.items()
-        }
-        metrics["selection_score"] = sum(components.values())
-
-    ranked = sorted(
-        eligible,
-        key=lambda item: (
-            -item["metrics"]["selection_score"],
-            -float(item["metrics"]["net_pnl"]),
-            abs(min(0.0, float(
-                item["metrics"]["intraday_drawdown"]
-                if item["metrics"]["intraday_drawdown"] is not None
-                else item["metrics"]["max_drawdown"]
-            ))),
-            item["index"],
-        ),
-    )
-    for rank, item in enumerate(ranked, 1):
-        item["rank"] = rank
-    return ranked[0]["index"]
+def _sweep_payload(summaries, iteration_count, *, partial=False):
+    return sweep_payload(summaries, iteration_count, partial=partial)
 
 
 def _compact_iteration(iteration_folder, summary):
@@ -244,34 +140,6 @@ def _compact_iteration(iteration_folder, summary):
     (iteration_folder / "summary.json").write_text(
         json.dumps(summary, allow_nan=False), encoding="utf-8"
     )
-
-
-def _sweep_payload(summaries, iteration_count, *, partial=False):
-    recommended_index = _rank_sweep(summaries)
-    return {
-        "iteration_count": iteration_count,
-        "processed_count": len(summaries),
-        "completed_count": sum(item["status"] == "succeeded" for item in summaries),
-        "ranked_count": sum("rank" in item for item in summaries),
-        "no_trade_count": sum(item["status"] == "no_trades" for item in summaries),
-        "failed_count": sum(item["status"] == "failed" for item in summaries),
-        "recommended_index": recommended_index,
-        "selection_metrics": SELECTION_METRICS,
-        "quartile_points": QUARTILE_POINTS,
-        "recent_year_decay": RECENT_YEAR_DECAY,
-        "partial": partial,
-        "iterations": summaries,
-    }
-
-
-def _write_partial_sweep(folder, sweep):
-    """Atomically save completed sweep rows so they remain reviewable after cancellation."""
-    temporary = folder / f"partial-sweep-{uuid4().hex}.tmp"
-    temporary.write_text(json.dumps(sweep, allow_nan=False), encoding="utf-8")
-    try:
-        temporary.replace(folder / "partial-sweep.json")
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def _existing_iteration(iteration_folder, index, parameters):
@@ -318,16 +186,16 @@ def _run_sweep(module, base_context, folder, dataset, execute=None):
     summaries = [summary for summary in existing.values() if summary is not None]
     summaries.sort(key=lambda summary: summary["index"])
     sweep_started = time.perf_counter()
-    combination_durations = []
+    duration_count = 0
+    duration_total_seconds = 0.0
     next_index = next((index for index in range(len(parameters)) if existing[index] is None), None)
     _write_progress(
         folder, completed=len(summaries), total=len(parameters),
         current=next_index + 1 if next_index is not None else None,
         combination_elapsed_seconds=0.0,
-        completed_combination_seconds=combination_durations,
+        completed_combination_count=duration_count,
+        completed_combination_total_seconds=duration_total_seconds,
     )
-    if summaries:
-        _write_partial_sweep(folder, _sweep_payload(summaries, len(parameters), partial=True))
     for index, parameter_set in enumerate(parameters):
         if existing[index] is not None:
             continue
@@ -341,7 +209,13 @@ def _run_sweep(module, base_context, folder, dataset, execute=None):
             market_data_loader=getattr(base_context, "market_data_loader", None),
             config=config,
         )
+        progress_state = {"last_write": 0.0, "phase": object()}
+
         def report_current(completed, total, unit="item", phase=None):
+            now = time.perf_counter()
+            if phase == progress_state["phase"] and now - progress_state["last_write"] < 1.0:
+                return
+            progress_state.update(last_write=now, phase=phase)
             _write_progress(
                 folder,
                 completed=index,
@@ -351,9 +225,10 @@ def _run_sweep(module, base_context, folder, dataset, execute=None):
                 combination_total=total,
                 combination_unit=unit,
                 combination_phase=phase,
-                combination_elapsed_seconds=time.perf_counter() - combination_started,
-                completed_combination_seconds=combination_durations,
-                elapsed_seconds=time.perf_counter() - sweep_started,
+                combination_elapsed_seconds=now - combination_started,
+                completed_combination_count=duration_count,
+                completed_combination_total_seconds=duration_total_seconds,
+                elapsed_seconds=now - sweep_started,
             )
         context.report_progress = report_current
         iteration_folder = folder / "iterations" / str(index)
@@ -374,16 +249,16 @@ def _run_sweep(module, base_context, folder, dataset, execute=None):
             summary = _summary(index, parameter_set, detail)
         _compact_iteration(iteration_folder, summary)
         summaries.append(summary)
-        summaries.sort(key=lambda item: item["index"])
-        combination_durations.append(time.perf_counter() - combination_started)
-        _write_partial_sweep(folder, _sweep_payload(summaries, len(parameters), partial=True))
+        duration_count += 1
+        duration_total_seconds += time.perf_counter() - combination_started
         _write_progress(
             folder,
             completed=index + 1,
             total=len(parameters),
             current=index + 2 if index + 1 < len(parameters) else None,
             combination_elapsed_seconds=0.0,
-            completed_combination_seconds=combination_durations,
+            completed_combination_count=duration_count,
+            completed_combination_total_seconds=duration_total_seconds,
             elapsed_seconds=time.perf_counter() - sweep_started,
         )
     return {

@@ -13,6 +13,7 @@ import time
 from uuid import uuid4
 import zipfile
 from .datasets import resolve_dataset
+from .sweep import sweep_payload
 
 MAX_ARCHIVE_BYTES = 2 * 1024**3
 SINGLE_RUN_TIMEOUT = 1800
@@ -249,7 +250,7 @@ class LocalRunner:
             if sweep.get("processed_count", 0) >= sweep.get("iteration_count", 0):
                 raise ValueError("All combinations are already complete.")
             job.update(self._launch(job["folder"], SWEEP_RUN_TIMEOUT))
-            for key in ("finished", "error", "result", "history_id", "history_error"):
+            for key in ("finished", "error", "result", "history_id", "history_error", "partial_sweep_cache"):
                 job.pop(key, None)
             threading.Thread(
                 target=self._watch, args=(identifier, job["process"], job["timeout"]), daemon=True
@@ -313,11 +314,42 @@ class LocalRunner:
 
     @staticmethod
     def _partial_sweep(job):
+        cached = job.get("partial_sweep_cache")
+        if cached is not None:
+            return cached
+        summaries = []
+        iterations = job["folder"] / "iterations"
+        if iterations.is_dir():
+            for folder in iterations.iterdir():
+                if not folder.is_dir() or not folder.name.isdigit():
+                    continue
+                summary_path = folder / "summary.json"
+                try:
+                    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError, TypeError):
+                    continue
+                if summary.get("status") in {"succeeded", "no_trades", "failed"}:
+                    summaries.append(summary)
+        if summaries:
+            total = len(summaries)
+            try:
+                progress = json.loads((job["folder"] / "progress.json").read_text(encoding="utf-8"))
+                total = max(total, int(progress.get("total", total)))
+            except (OSError, ValueError, TypeError):
+                pass
+            sweep = sweep_payload(summaries, total, partial=True)
+            job["partial_sweep_cache"] = sweep
+            return sweep
+
+        # Backward compatibility for sweeps created before compact summaries
+        # were used as the cancellation checkpoint.
         path = job["folder"] / "partial-sweep.json"
         if not path.is_file():
             return None
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            sweep = json.loads(path.read_text(encoding="utf-8"))
+            job["partial_sweep_cache"] = sweep
+            return sweep
         except (OSError, ValueError, TypeError):
             return None
 
@@ -491,8 +523,15 @@ class LocalRunner:
                         completed / progress_elapsed if completed and progress_elapsed > 0 else None
                     )
                     if progress.get("mode") == "sweep":
-                        durations = progress.get("completed_combination_seconds") or []
-                        average = sum(durations) / len(durations) if durations else None
+                        duration_count = progress.get("completed_combination_count")
+                        duration_total = progress.get("completed_combination_total_seconds")
+                        if duration_count and duration_total is not None:
+                            average = float(duration_total) / int(duration_count)
+                        else:
+                            # Old jobs stored every duration. Read them only for
+                            # compatibility; new sweeps retain constant-size timing.
+                            durations = progress.get("completed_combination_seconds") or []
+                            average = sum(durations) / len(durations) if durations else None
                         current_elapsed = progress.get("combination_elapsed_seconds", 0.0)
                         current_completed = progress.get("combination_completed", 0)
                         current_total = progress.get("combination_total", 0)
