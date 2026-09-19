@@ -5,14 +5,11 @@ from decimal import Decimal
 import hashlib
 from pathlib import Path
 
-from trade_log_exporter import TradeLogError
-from trade_log_exporter.equity import read_equity_csv
+from trade_log_exporter import TradeLogError, TradeRecord
+from trade_log_exporter.equity import read_equity_csv, validate_equity_rows
 
 
-def analyze_equity(equity_path, trade_path):
-    run_id, snapshots = read_equity_csv(equity_path)
-    with Path(trade_path).open(encoding="utf-8-sig", newline="") as handle:
-        trades = list(csv.DictReader(handle))
+def _analyze_equity(run_id, snapshots, trades, digest):
     if {row["run_id"] for row in trades} != {run_id}:
         raise TradeLogError("Equity run_id does not match the trade log")
     def instant(value):
@@ -57,4 +54,37 @@ def analyze_equity(equity_path, trade_path):
             "trough_time": worst_time.isoformat() if worst_time else None,
             "max_gap_seconds": max((b["timestamp"] - a["timestamp"]).total_seconds() for a, b in zip(snapshots, snapshots[1:])),
             "snapshot_count": len(series), "series": series,
-            "sha256": hashlib.sha256(Path(equity_path).read_bytes()).hexdigest()}
+            "sha256": digest}
+
+
+def analyze_equity(equity_path, trade_path):
+    run_id, snapshots = read_equity_csv(equity_path)
+    with Path(trade_path).open(encoding="utf-8-sig", newline="") as handle:
+        trades = list(csv.DictReader(handle))
+    return _analyze_equity(
+        run_id, snapshots, trades, hashlib.sha256(Path(equity_path).read_bytes()).hexdigest()
+    )
+
+
+def analyze_equity_snapshots(snapshots, records: list[TradeRecord]):
+    """Validate engine snapshots and calculate intraday metrics without files."""
+    if not records:
+        raise TradeLogError("Equity analysis requires completed trades")
+    run_ids = {record.run_id for record in records}
+    if len(run_ids) != 1:
+        raise TradeLogError("All records must have the same run_id")
+    run_id = next(iter(run_ids))
+    rows = []
+    for snapshot in snapshots:
+        if not isinstance(snapshot, dict):
+            raise TradeLogError("Equity snapshots must be mappings")
+        rows.append({
+            "schema_version": "1", "run_id": run_id,
+            "timestamp": snapshot.get("timestamp"),
+            "realized_pnl": snapshot.get("realized_pnl"),
+            "unrealized_pnl": snapshot.get("unrealized_pnl"),
+        })
+    checked_run_id, checked_snapshots = validate_equity_rows(rows)
+    trades = [record.to_csv_row() for record in records]
+    digest = hashlib.sha256(repr(rows).encode("utf-8")).hexdigest()
+    return _analyze_equity(checked_run_id, checked_snapshots, trades, digest)

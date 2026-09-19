@@ -13,9 +13,9 @@ from trade_log_dashboard.market_data import MarketDataLoader
 from collections.abc import Mapping, Sequence
 from uuid import uuid4
 
-from trade_log_exporter import export_trade_log, export_equity_snapshots
+from trade_log_exporter import export_trade_log, export_equity_snapshots, prepare_trade_records
 from trade_log_dashboard.analytics import analyze_trade_log
-from trade_log_dashboard.equity import analyze_equity
+from trade_log_dashboard.equity import analyze_equity, analyze_equity_snapshots
 from trade_log_dashboard.legacy import supports_protected_straddle, run_protected_straddle
 from trade_log_dashboard.sweep import QUARTILE_POINTS, SELECTION_METRICS, rank_sweep, sweep_payload
 
@@ -59,12 +59,12 @@ def _validate_result(result):
     return int(count)
 
 
-def _execute_result(result, context, output_folder, dataset):
-    output_folder.mkdir(parents=True, exist_ok=True)
+def _execute_result(result, context, output_folder, dataset, *, persist_artifacts=True):
+    if persist_artifacts:
+        output_folder.mkdir(parents=True, exist_ok=True)
     count = _validate_result(result)
-    receipt = export_trade_log(
-        result["completed_trades"], output_folder / "trades.csv",
-        mapper=result.get("trade_mapper"), expected_count=count,
+    records = prepare_trade_records(
+        result["completed_trades"], mapper=result.get("trade_mapper"), expected_count=count,
     )
     if count == 0:
         return {
@@ -73,21 +73,29 @@ def _execute_result(result, context, output_folder, dataset):
             "analysis": None,
             "has_equity": False,
         }
-    print(f"Validating and analysing {receipt.row_count} completed legs…", flush=True)
-    analysis = analyze_trade_log(receipt.output_path, validated_receipt=receipt)
+    print(f"Validating and analysing {len(records)} completed legs…", flush=True)
+    if persist_artifacts:
+        receipt = export_trade_log(records, output_folder / "trades.csv", expected_count=count)
+        analysis = analyze_trade_log(receipt.output_path, validated_receipt=receipt)
+    else:
+        analysis = analyze_trade_log(records=records)
     analysis["dataset"] = dataset or {"id": None, "label": "Custom data"}
     parameters = context.config.get("parameters", {})
     analysis["parameters"] = dict(parameters) if isinstance(parameters, Mapping) else {}
     has_equity = result.get("equity_snapshots") is not None
     if has_equity:
-        equity_path = export_equity_snapshots(
-            result["equity_snapshots"], output_folder / "equity.csv", run_id=context.run_id
+        if persist_artifacts:
+            equity_path = export_equity_snapshots(
+                result["equity_snapshots"], output_folder / "equity.csv", run_id=context.run_id
+            )
+            analysis["intraday"] = analyze_equity(equity_path, receipt.output_path)
+        else:
+            analysis["intraday"] = analyze_equity_snapshots(result["equity_snapshots"], records)
+    if persist_artifacts:
+        (output_folder / "analysis.json").write_text(
+            json.dumps({"status": "succeeded", "analysis": analysis, "has_equity": has_equity}, allow_nan=False),
+            encoding="utf-8",
         )
-        analysis["intraday"] = analyze_equity(equity_path, receipt.output_path)
-    (output_folder / "analysis.json").write_text(
-        json.dumps({"status": "succeeded", "analysis": analysis, "has_equity": has_equity}, allow_nan=False),
-        encoding="utf-8",
-    )
     return {"status": "succeeded", "analysis": analysis, "has_equity": has_equity}
 
 
@@ -234,7 +242,7 @@ def _run_sweep(module, base_context, folder, dataset, execute=None):
         iteration_folder = folder / "iterations" / str(index)
         try:
             result = execute(context) if execute else module.run_strategy(context)
-            detail = _execute_result(result, context, iteration_folder, dataset)
+            detail = _execute_result(result, context, iteration_folder, dataset, persist_artifacts=False)
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
             print(f"Variation {index + 1} failed · {error}", flush=True)

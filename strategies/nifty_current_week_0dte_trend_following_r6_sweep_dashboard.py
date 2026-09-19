@@ -547,6 +547,59 @@ def _select_short_leg(
     )
 
 
+def _precompute_entry_selections(
+    day_summary: pd.DataFrame,
+    chain_lookup: QuoteLookup,
+) -> dict[tuple[pd.Timestamp, str, float], tuple[str, int, float]]:
+    """Select every configured CE/PE premium once per timestamp.
+
+    These selections depend only on market data and the three sweep premium
+    targets. They are immutable and can be shared by all other parameters.
+    """
+    selections = {}
+    for _, row in day_summary.iterrows():
+        timestamp = pd.Timestamp(row["ts"])
+        quotes = _quotes_at(chain_lookup, timestamp)
+        if quotes is None:
+            continue
+        for direction in ("call", "put"):
+            for premium_pct in STRIKE_PREMIUM_PCTS:
+                try:
+                    selections[(timestamp, direction, float(premium_pct))] = _select_short_leg(
+                        quotes, direction, int(row["future_atm"]),
+                        float(row["straddle_future"]), float(premium_pct),
+                    )
+                except ValueError:
+                    # Preserve the existing runtime error/re-entry behavior for
+                    # timestamps without a valid contract.
+                    continue
+    return selections
+
+
+def _cached_entry_selections(
+    market_data: Path,
+    day: Any,
+    day_summary: pd.DataFrame,
+    chain_lookup: QuoteLookup,
+    market_data_loader: Any = None,
+    partitioned_chain: Path | None = None,
+) -> dict[tuple[pd.Timestamp, str, float], tuple[str, int, float]]:
+    day_iso = pd.Timestamp(day).date().isoformat()
+    summary_path = market_data / "nifty_summary.parquet"
+    source_folder = (partitioned_chain / f"trade_date={day_iso}") if partitioned_chain else (market_data / "nifty_chain")
+    sources = [summary_path, *sorted(source_folder.glob("*.parquet"))]
+    shared_object = getattr(market_data_loader, "shared_object", None)
+    build = lambda: _precompute_entry_selections(day_summary, chain_lookup)
+    if callable(shared_object) and all(path.is_file() for path in sources):
+        return shared_object(
+            sources,
+            ("r6-entry-selections-v1", str(market_data.resolve()), day_iso,
+             tuple(STRIKE_PREMIUM_PCTS), partitioned_chain is not None),
+            build,
+        )
+    return build()
+
+
 def _open_slot(
     *,
     slot_id: int,
@@ -558,13 +611,10 @@ def _open_slot(
     straddle_premium: float,
     premium_pct: float,
     slippage: float,
+    selection: tuple[str, int, float] | None = None,
 ) -> Slot:
-    option_type, strike, raw_price = _select_short_leg(
-        quotes,
-        direction,
-        atm_strike,
-        straddle_premium,
-        premium_pct,
+    option_type, strike, raw_price = selection or _select_short_leg(
+        quotes, direction, atm_strike, straddle_premium, premium_pct,
     )
     return Slot(
         slot_id=slot_id,
@@ -660,6 +710,7 @@ def _run_day(
     starting_slot_id: int,
     starting_trade_sequence: int,
     starting_realized_points: float,
+    entry_selections: Mapping[tuple[pd.Timestamp, str, float], tuple[str, int, float]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int, int, float]:
     entry_time = _parse_time(parameters["entry_time"])
     square_off_time = _parse_time(parameters["square_off_time"])
@@ -788,6 +839,7 @@ def _run_day(
                     straddle_premium=float(row["straddle_future"]),
                     premium_pct=premium_pct,
                     slippage=slippage,
+                    selection=entry_selections.get((timestamp, direction, premium_pct)),
                 )
             except ValueError:
                 pending_reentries.append(reentry)
@@ -823,6 +875,7 @@ def _run_day(
                     straddle_premium=current_straddle,
                     premium_pct=premium_pct,
                     slippage=slippage,
+                    selection=entry_selections.get((timestamp, direction, premium_pct)),
                 )
                 open_slots.append(slot)
                 used_reentries_by_slot[next_slot_id] = 0
@@ -918,6 +971,9 @@ def run_strategy(context: StrategyContext) -> dict[str, Any]:
         lookup = _load_chain_lookup(
             market_data, day, market_data_loader, partitioned_chain
         )
+        entry_selections = _cached_entry_selections(
+            market_data, day, day_summary, lookup, market_data_loader, partitioned_chain
+        )
         day_rows, day_snapshots, next_slot_id, trade_sequence, cumulative_realized_points = _run_day(
             run_id=run_id,
             day_summary=day_summary,
@@ -926,6 +982,7 @@ def run_strategy(context: StrategyContext) -> dict[str, Any]:
             starting_slot_id=next_slot_id,
             starting_trade_sequence=trade_sequence,
             starting_realized_points=cumulative_realized_points,
+            entry_selections=entry_selections,
         )
         completed_rows.extend(day_rows)
         equity_snapshots.extend(day_snapshots)

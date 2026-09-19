@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+import hashlib
+import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import duckdb
 
-from trade_log_exporter import ExportReceipt, TradeLogError, validate_trade_log_csv
+from trade_log_exporter import CSV_COLUMNS, ExportReceipt, TradeLogError, TradeRecord, validate_trade_log_csv
 
 
 def _json_value(value: Any) -> Any:
@@ -45,19 +47,51 @@ def _longest_underwater(drawdowns: list[float]) -> int:
     return longest
 
 
-def analyze_trade_log(csv_path: str | Path, *, validated_receipt: ExportReceipt | None = None) -> dict[str, Any]:
-    """Validate a schema-v1 CSV and calculate dashboard metrics with DuckDB."""
-    path = Path(csv_path).resolve()
-    receipt = validated_receipt or validate_trade_log_csv(path)
+def analyze_trade_log(
+    csv_path: str | Path | None = None,
+    *,
+    validated_receipt: ExportReceipt | None = None,
+    records: Iterable[TradeRecord] | None = None,
+) -> dict[str, Any]:
+    """Calculate dashboard metrics from a validated CSV or canonical records.
+
+    Sweep rows pass validated records directly, avoiding a CSV and manifest for
+    every combination. A selected row is still rerun with normal file exports.
+    """
+    memory_rows = list(records) if records is not None else None
+    if memory_rows is not None:
+        if csv_path is not None or validated_receipt is not None:
+            raise ValueError("Use either records or a validated CSV, not both")
+        digest = hashlib.sha256()
+        for record in memory_rows:
+            digest.update(json.dumps(record.to_csv_row(), sort_keys=True).encode("utf-8"))
+        receipt = ExportReceipt(
+            output_path=Path("<in-memory>"), manifest_path=Path("<in-memory>"),
+            row_count=len(memory_rows), sha256=digest.hexdigest(),
+        )
+        path = None
+    else:
+        if csv_path is None:
+            raise ValueError("csv_path or records is required")
+        path = Path(csv_path).resolve()
+        receipt = validated_receipt or validate_trade_log_csv(path)
     if receipt.row_count == 0:
-        raise TradeLogError("The CSV is valid but contains no completed trades")
+        raise TradeLogError("The trade log is valid but contains no completed trades")
 
     connection = duckdb.connect(":memory:")
     try:
-        connection.execute(
-            "CREATE TABLE source AS SELECT * FROM read_csv(?, header=true, all_varchar=true)",
-            [str(path)],
-        )
+        if memory_rows is None:
+            connection.execute(
+                "CREATE TABLE source AS SELECT * FROM read_csv(?, header=true, all_varchar=true)",
+                [str(path)],
+            )
+        else:
+            columns = ", ".join(f'"{column}" VARCHAR' for column in CSV_COLUMNS)
+            connection.execute(f"CREATE TABLE source ({columns})")
+            connection.executemany(
+                f"INSERT INTO source VALUES ({', '.join('?' for _ in CSV_COLUMNS)})",
+                [tuple(record.to_csv_row()[column] for column in CSV_COLUMNS) for record in memory_rows],
+            )
         connection.execute(
             """
             CREATE TEMP TABLE legs AS

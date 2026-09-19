@@ -105,6 +105,47 @@ def _write_manifest(receipt: ExportReceipt) -> None:
     )
 
 
+def prepare_trade_records(
+    completed_trades: Iterable[RawTrade],
+    *,
+    mapper: TradeMapper[RawTrade] | None = None,
+    expected_count: int | None = None,
+    assume_timezone: tzinfo | None = None,
+) -> list[TradeRecord]:
+    """Validate completed engine output without writing a trade-log file.
+
+    Sweep workers use this to calculate comparison metrics in memory.  The
+    exact schema, count, run-id and uniqueness checks are shared with export.
+    """
+    raw_trades = _materialize_completed_trades(completed_trades)
+    if expected_count is not None and len(raw_trades) != expected_count:
+        raise TradeLogError(
+            f"Engine completed-trade count ({expected_count}) does not match "
+            f"received trade count ({len(raw_trades)})"
+        )
+
+    records: list[TradeRecord] = []
+    for index, raw in enumerate(raw_trades):
+        try:
+            mapped = mapper(raw, index) if mapper is not None else raw
+            if mapper is None and callable(getattr(mapped, "to_dict", None)):
+                mapped = mapped.to_dict()
+            if not isinstance(mapped, (Mapping, TradeRecord)):
+                raise TradeLogError("The mapper must return a mapping or TradeRecord")
+            records.append(_to_record(mapped, assume_timezone=assume_timezone))
+        except Exception as exc:
+            if isinstance(exc, TradeLogError):
+                raise TradeLogError(f"Trade {index + 1}: {exc}") from exc
+            raise TradeLogError(f"Trade {index + 1}: adapter failed: {exc}") from exc
+
+    trade_ids = [record.trade_id for record in records]
+    if len(trade_ids) != len(set(trade_ids)):
+        raise TradeLogError("trade_id values must be unique within one export")
+    if len({record.run_id for record in records}) > 1:
+        raise TradeLogError("All rows in one CSV must have the same run_id")
+    return records
+
+
 def export_trade_log(
     completed_trades: Iterable[RawTrade],
     output_path: str | Path = "output/trades.csv",
@@ -119,36 +160,10 @@ def export_trade_log(
     either a canonical mapping or ``TradeRecord``. If the iterable already contains
     canonical mappings, mapper may be omitted.
     """
-    raw_trades = _materialize_completed_trades(completed_trades)
-    if expected_count is not None and len(raw_trades) != expected_count:
-        raise TradeLogError(
-            f"Engine completed-trade count ({expected_count}) does not match "
-            f"received trade count ({len(raw_trades)})"
-        )
-
-    records: list[TradeRecord] = []
-    for index, raw in enumerate(raw_trades):
-        try:
-            mapped = mapper(raw, index) if mapper is not None else raw
-            # iterrows yields Series; preserve custom mapper inputs but allow
-            # canonical DataFrame rows without a mapper too.
-            if mapper is None and callable(getattr(mapped, "to_dict", None)):
-                mapped = mapped.to_dict()
-            if not isinstance(mapped, (Mapping, TradeRecord)):
-                raise TradeLogError("The mapper must return a mapping or TradeRecord")
-            records.append(_to_record(mapped, assume_timezone=assume_timezone))
-        except Exception as exc:
-            if isinstance(exc, TradeLogError):
-                raise TradeLogError(f"Trade {index + 1}: {exc}") from exc
-            raise TradeLogError(f"Trade {index + 1}: adapter failed: {exc}") from exc
-
-    trade_ids = [record.trade_id for record in records]
-    if len(trade_ids) != len(set(trade_ids)):
-        raise TradeLogError("trade_id values must be unique within one export")
-
-    runs = {record.run_id for record in records}
-    if len(runs) > 1:
-        raise TradeLogError("All rows in one CSV must have the same run_id")
+    records = prepare_trade_records(
+        completed_trades, mapper=mapper, expected_count=expected_count,
+        assume_timezone=assume_timezone,
+    )
 
     destination = Path(output_path).resolve()
     _write_atomic_csv(records, destination)

@@ -5,6 +5,7 @@ from .core import (
     TradeLogError,
     TradeRecorder,
     export_trade_log,
+    prepare_trade_records,
     validate_trade_log_csv,
 )
 from .schema import CSV_COLUMNS, SCHEMA_VERSION, TradeRecord
@@ -30,6 +31,7 @@ __all__ = [
     "SWEEP_SCHEMA_VERSION",
     "SweepExportReceipt",
     "export_trade_log",
+    "prepare_trade_records",
     "export_sweep_summary",
     "validate_trade_log_csv",
     "validate_sweep_summary_csv",
