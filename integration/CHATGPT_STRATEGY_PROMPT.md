@@ -109,6 +109,14 @@ REQUIRED MODULE BOUNDARY
     regions, and validate finalists over the full period. Clearly label those
     results as exploratory. Never prune, sample, skip, or estimate results when
     the request requires every declared combination.
+23. For an explicitly permitted high-volume screening pass, a compiled batch
+    kernel may retain only provisional numeric outputs such as net P&L, trade
+    count, win/loss totals, and observed drawdown. It must still execute every
+    strategy rule. It may skip materializing trade rows and equity snapshots,
+    but must not present those provisional values as trusted analytics, save
+    them, or make a final recommendation. Rerun shortlisted combinations with
+    the ordinary `run_strategy(context)` path and require full trade/equity
+    validation before treating any result as final.
 
 COMPLETED-TRADE RETURN
 After the supported engine finishes, return:

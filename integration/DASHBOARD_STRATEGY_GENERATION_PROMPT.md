@@ -125,6 +125,14 @@ REQUIRED DASHBOARD CONTRACT
     complete period. Label exploratory results clearly. If the request declares
     an exact Cartesian grid or requires every combination, do not prune, skip,
     sample, or infer untested results.
+24. For an explicitly permitted high-volume screening pass, the compiled batch
+    kernel may retain only provisional numeric outputs such as net P&L, trade
+    count, win/loss totals, and observed drawdown. It must still execute every
+    strategy rule. It may skip materializing trade rows and equity snapshots,
+    but must not present those provisional values as trusted analytics, save
+    them, or make a final recommendation. Rerun shortlisted combinations with
+    the normal `run_strategy(context)` path and require full trade/equity
+    validation before treating any result as final.
 
 OUTPUT
 Return the complete Python module and then a brief note listing expected data
