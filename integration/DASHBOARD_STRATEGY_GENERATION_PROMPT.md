@@ -87,6 +87,27 @@ REQUIRED DASHBOARD CONTRACT
     unavailable validation honestly; do not declare success from import-only
     or signal-direction tests. Final equity must reconcile across all sessions
     and LONG/SHORT legs, including fees and quantities.
+19. For a large sweep, generate an optimized execution design in addition to
+    the auditable `run_strategy(context)` path. Load market data once through
+    `context.market_data`, prepare immutable NumPy arrays, precompute option
+    selections for every required timestamp, side, and premium target, and
+    process parameter mappings in bounded batches. Where the numeric state
+    loop is compatible with Numba, implement it as a small `@numba.njit`
+    function that accepts only numeric arrays and scalar settings. Do not put
+    Pandas objects, dictionaries, file I/O, progress callbacks, or trade-log
+    writing inside that compiled function.
+20. Numba is an optimization, not permission to alter trading behavior. The
+    generated module must keep the normal Python path for a selected-combination
+    rerun and compare representative combinations from the compiled batch path
+    against that path. Compare completed trade count, every entry/exit fill,
+    final P&L, and final observed equity. If parity is not demonstrated, use
+    the normal path and state that the batch path is unavailable.
+21. Make batch size configurable through a visible strategy constant, choose a
+    bounded default that controls RAM, and release each batch's temporary
+    numeric arrays before starting the next one. Never fabricate trade rows or
+    metrics from a vectorized approximation. Any batch result shown by the
+    dashboard must still be derived from the strategy's actual completed trades
+    and observed equity.
 
 OUTPUT
 Return the complete Python module and then a brief note listing expected data

@@ -87,6 +87,14 @@ REQUIRED MODULE BOUNDARY
 19. Use only normal Python imports in the module. List any additional
    Colab-installable packages in source comments; installation belongs in the
    notebook setup cell.
+20. For large parameter sweeps, generate a Numba-compatible batch design:
+    load and prepare immutable market arrays once, precompute every needed
+    CE/PE selection, and evaluate mappings in bounded NumPy batches. Restrict
+    `@numba.njit` functions to numeric arrays and scalar state. Keep file I/O,
+    Pandas, dictionaries, progress reporting, and trade-log output outside the
+    compiled kernel. Retain the ordinary single-combination path and prove on
+    a representative sample that every trade fill, final P&L, and final equity
+    match before using the compiled result.
 
 COMPLETED-TRADE RETURN
 After the supported engine finishes, return:

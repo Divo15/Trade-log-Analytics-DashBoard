@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import hashlib
 from pathlib import Path
+from collections.abc import Mapping
 
 from trade_log_exporter import TradeLogError, TradeRecord
 from trade_log_exporter.equity import read_equity_csv, validate_equity_rows
@@ -74,9 +75,11 @@ def analyze_equity_snapshots(snapshots, records: list[TradeRecord]):
     if len(run_ids) != 1:
         raise TradeLogError("All records must have the same run_id")
     run_id = next(iter(run_ids))
+    if callable(getattr(snapshots, "iterrows", None)):
+        snapshots = (row.to_dict() for _, row in snapshots.iterrows())
     rows = []
     for snapshot in snapshots:
-        if not isinstance(snapshot, dict):
+        if not isinstance(snapshot, Mapping):
             raise TradeLogError("Equity snapshots must be mappings")
         rows.append({
             "schema_version": "1", "run_id": run_id,
