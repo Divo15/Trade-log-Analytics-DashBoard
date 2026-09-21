@@ -108,6 +108,15 @@ REQUIRED DASHBOARD CONTRACT
     metrics from a vectorized approximation. Any batch result shown by the
     dashboard must still be derived from the strategy's actual completed trades
     and observed equity.
+22. When parameter combinations are independent, use controlled CPU
+    parallelism inside the numeric batch kernel with `@numba.njit(parallel=True)`
+    and `numba.prange`, rather than allowing uncontrolled Python workers to
+    duplicate the market-data cache. Make the worker count configurable, cap it
+    to the available CPU cores, preserve deterministic index ordering, and
+    ensure each combination owns its own numeric state and output slot. Do not
+    parallelize across shared mutable positions, fills, trade lists, equity
+    snapshots, progress files, or dashboard result storage. Compare parallel
+    and one-worker outputs before enabling more than one worker.
 
 OUTPUT
 Return the complete Python module and then a brief note listing expected data

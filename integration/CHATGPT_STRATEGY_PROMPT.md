@@ -95,6 +95,13 @@ REQUIRED MODULE BOUNDARY
     compiled kernel. Retain the ordinary single-combination path and prove on
     a representative sample that every trade fill, final P&L, and final equity
     match before using the compiled result.
+21. Parallelize only independent numeric parameter slots with
+    `@numba.njit(parallel=True)` and `numba.prange`. Use a visible bounded
+    worker setting, cap it to available CPU cores, keep deterministic parameter
+    indexes, and allocate separate state/output slots per combination. Never
+    parallelize shared mutable positions, trade lists, snapshots, progress
+    reporting, files, or dashboard storage. Verify parallel and one-worker
+    results match exactly before using multiple CPU cores.
 
 COMPLETED-TRADE RETURN
 After the supported engine finishes, return:
