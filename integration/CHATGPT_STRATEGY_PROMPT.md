@@ -102,6 +102,13 @@ REQUIRED MODULE BOUNDARY
     parallelize shared mutable positions, trade lists, snapshots, progress
     reporting, files, or dashboard storage. Verify parallel and one-worker
     results match exactly before using multiple CPU cores.
+22. Use pruning or staged search only when the user explicitly allows an
+    exploratory search that evaluates fewer than all requested combinations.
+    Keep it separate from an exhaustive grid: use a coarse pass or limited
+    screening period, define risk-based retention criteria, refine promising
+    regions, and validate finalists over the full period. Clearly label those
+    results as exploratory. Never prune, sample, skip, or estimate results when
+    the request requires every declared combination.
 
 COMPLETED-TRADE RETURN
 After the supported engine finishes, return:

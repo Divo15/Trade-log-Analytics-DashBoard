@@ -117,6 +117,14 @@ REQUIRED DASHBOARD CONTRACT
     parallelize across shared mutable positions, fills, trade lists, equity
     snapshots, progress files, or dashboard result storage. Compare parallel
     and one-worker outputs before enabling more than one worker.
+23. Use pruning or staged search only when the strategy request explicitly
+    permits an exploratory search that evaluates fewer than every requested
+    combination. Keep it separate from an exhaustive sweep: first run a coarse
+    grid or bounded screening period, retain promising parameter regions using
+    stated risk limits, then run a finer grid and validate finalists on the
+    complete period. Label exploratory results clearly. If the request declares
+    an exact Cartesian grid or requires every combination, do not prune, skip,
+    sample, or infer untested results.
 
 OUTPUT
 Return the complete Python module and then a brief note listing expected data
