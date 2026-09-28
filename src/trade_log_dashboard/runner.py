@@ -93,7 +93,7 @@ class LocalRunner:
 
     def _launch(self, folder, timeout):
         env = os.environ.copy()
-        paths = [str(Path(__file__).resolve().parents[1])] + [
+        paths = [str(Path(__file__).resolve().parents[2]), str(Path(__file__).resolve().parents[1])] + [
             str(Path(path).resolve()) for path in sys.path if path and Path(path).exists()
         ]
         env["PYTHONPATH"] = os.pathsep.join(paths)
@@ -221,7 +221,9 @@ class LocalRunner:
             request["run_mode_override"] = "single"
             request["optimizer_parent_id"] = identifier
             request["optimizer_iteration"] = int(index)
-            request["optimizer_expected_metrics"] = summary["metrics"]
+            request["optimizer_expected_metrics"] = (
+                None if summary.get("provisional") else summary["metrics"]
+            )
             request.setdefault("config", {})["parameters"] = summary["parameters"]
             (folder / "request.json").write_text(json.dumps(request), encoding="utf-8")
 
@@ -269,6 +271,8 @@ class LocalRunner:
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
             if summary.get("status") != "succeeded" or not summary.get("metrics"):
                 raise ValueError("Choose a combination that completed with trades.")
+            if summary.get("provisional"):
+                raise ValueError("Rerun this provisional combination through the oracle before saving it.")
             sweep = parent.get("result", {}).get("sweep", {}) or self._partial_sweep(parent) or {}
             ranked_summary = next(
                 (item for item in sweep.get("iterations", []) if item.get("index") == int(index)),

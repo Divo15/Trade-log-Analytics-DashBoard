@@ -1,6 +1,8 @@
 """Local subprocess entry point. Uploaded strategies execute with user privileges."""
 import importlib.util
+import importlib
 import copy
+import heapq
 import json
 from pathlib import Path
 import shutil
@@ -168,7 +170,7 @@ def _existing_iteration(iteration_folder, index, parameters):
     return summary
 
 
-def _run_sweep(module, base_context, folder, dataset, execute=None):
+def _validated_sweep_parameters(module):
     values = getattr(module, "SWEEP_PARAMETER_SETS", None)
     if not isinstance(values, Sequence) or isinstance(values, (str, bytes)) or not values:
         raise ValueError("Sweep strategies must declare a non-empty SWEEP_PARAMETER_SETS sequence of parameter mappings.")
@@ -186,6 +188,121 @@ def _run_sweep(module, base_context, folder, dataset, execute=None):
             raise ValueError(f"Sweep variation {index} duplicates an earlier parameter set.")
         seen.add(fingerprint)
         parameters.append(normalized)
+    return parameters
+
+
+def _batch_accelerator(module):
+    name = getattr(module, "BATCH_ACCELERATOR", None)
+    if not name:
+        return None
+    if not isinstance(name, str) or not all(part.isidentifier() for part in name.split(".")):
+        raise ValueError("BATCH_ACCELERATOR must be a Python module name.")
+    return importlib.import_module(name)
+
+
+def _provisional_summary(index, parameters, metric, batch):
+    status_code = int(metric[batch.M_STATUS])
+    if status_code != batch.STATUS_OK:
+        return {
+            "index": index,
+            "parameters": parameters,
+            "status": "failed",
+            "provisional": True,
+            "error": f"Numba screening status {status_code}",
+            "metrics": None,
+        }
+    return {
+        "index": index,
+        "parameters": parameters,
+        "status": "succeeded",
+        "provisional": True,
+        "metrics": {
+            "net_pnl": float(metric[batch.M_NET_PNL]),
+            "max_drawdown": float(metric[batch.M_MAX_DRAWDOWN]),
+            "completed_trade_count": int(metric[batch.M_TRADE_COUNT]),
+            "status_code": status_code,
+            "provisional": True,
+        },
+    }
+
+
+def _run_accelerated_sweep(module, batch, base_context, folder, dataset):
+    """Screen every mapping numerically, retaining only top rows for the UI.
+
+    These rows are deliberately incomplete and provisional.  The existing
+    selected-iteration endpoint reruns the original module.run_strategy path.
+    """
+    parameters = _validated_sweep_parameters(module)
+    chunk_size = int(getattr(module, "BATCH_CHUNK_SIZE", getattr(batch, "DEFAULT_BATCH_SIZE", 25_000)))
+    if chunk_size < 1:
+        raise ValueError("BATCH_CHUNK_SIZE must be positive")
+    display_limit = int(getattr(module, "BATCH_DISPLAY_LIMIT", 100))
+    if display_limit < 1:
+        raise ValueError("BATCH_DISPLAY_LIMIT must be positive")
+    data, matrix = batch.prepare_batch_data(base_context, parameters)
+    started = time.perf_counter()
+    top = []
+    completed = 0
+    successful = 0
+    for start in range(0, len(parameters), chunk_size):
+        end = min(len(parameters), start + chunk_size)
+        metrics = batch.run_batch_kernel(
+            data,
+            matrix[start:end],
+            workers=getattr(module, "BATCH_WORKERS", None),
+            parallel=True,
+        )
+        for offset, metric in enumerate(metrics):
+            index = start + offset
+            summary = _provisional_summary(index, parameters[index], metric, batch)
+            completed += 1
+            if summary["status"] != "succeeded":
+                continue
+            successful += 1
+            score = float(summary["metrics"]["net_pnl"])
+            candidate = (score, -index, summary)
+            if len(top) < display_limit:
+                heapq.heappush(top, candidate)
+            elif candidate[:2] > top[0][:2]:
+                heapq.heapreplace(top, candidate)
+        _write_progress(
+            folder,
+            completed=completed,
+            total=len(parameters),
+            current=end + 1 if end < len(parameters) else None,
+            unit="combination",
+            elapsed_seconds=time.perf_counter() - started,
+            phase="Numba provisional screening",
+        )
+    retained = [item[2] for item in sorted(top, key=lambda item: (-item[0], -item[1]))]
+    for rank, summary in enumerate(retained, 1):
+        summary["rank"] = rank
+        iteration_folder = folder / "iterations" / str(summary["index"])
+        _compact_iteration(iteration_folder, summary)
+    recommended = retained[0]["index"] if retained else None
+    return {
+        "status": "succeeded",
+        "mode": "sweep",
+        "sweep": {
+            "iteration_count": len(parameters),
+            "processed_count": completed,
+            "completed_count": successful,
+            "ranked_count": len(retained),
+            "displayed_count": len(retained),
+            "no_trade_count": 0,
+            "failed_count": completed - successful,
+            "recommended_index": recommended,
+            "selection_metrics": ("net_pnl", "max_drawdown"),
+            "provisional": True,
+            "selection_basis": "highest provisional Numba net P&L; rerun through oracle before use",
+            "partial": False,
+            "iterations": retained,
+        },
+    }
+
+
+def _run_sweep(module, base_context, folder, dataset, execute=None):
+    parameters = _validated_sweep_parameters(module)
 
     existing = {
         index: _existing_iteration(folder / "iterations" / str(index), index, parameter_set)
@@ -304,7 +421,12 @@ def _run(folder, loader):
             raise ValueError("A run_strategy(context) strategy must declare STRATEGY_CONTRACT_VERSION='1' or '2'.")
         mode = "single" if selected_rerun else getattr(module, "RUN_MODE", "single")
         if mode == "sweep":
-            output = _run_sweep(module, context, folder, request.get("dataset"))
+            accelerator = None if selected_rerun else _batch_accelerator(module)
+            output = (
+                _run_accelerated_sweep(module, accelerator, context, folder, request.get("dataset"))
+                if accelerator is not None
+                else _run_sweep(module, context, folder, request.get("dataset"))
+            )
             (folder / "result.json").write_text(json.dumps(output, allow_nan=False), encoding="utf-8")
             return
         if mode != "single":

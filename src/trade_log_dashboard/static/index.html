@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Independent analytics for deterministic backtest trade logs">
   <title>Trade-log Analytics</title>
-  <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/app.css?v=20260928-3">
 </head>
 <body>
   <a class="skip-link" href="#mainContent">Skip to content</a>
@@ -26,7 +26,7 @@
 
   <main id="mainContent">
     <section class="runner-panel panel" id="runnerPanel" aria-labelledby="runnerTitle">
-      <div class="panel-heading"><div><h1 id="runnerTitle">Run a local backtest</h1><p>Upload your Python strategy, connect market data, then review calculated results.</p></div><button class="secondary-button" id="csvModeButton" type="button">I already have a trades CSV</button></div>
+      <div class="panel-heading"><div><h1 id="runnerTitle">Run a local backtest</h1><p>Upload your Python strategy, connect market data, then review calculated results.</p></div><div class="panel-heading-actions"><button class="secondary-button" id="parquetModeButton" type="button">Rank sweep Parquet</button><button class="secondary-button" id="csvModeButton" type="button">I already have a trades CSV</button></div></div>
       <form id="runForm">
         <div class="run-grid">
           <div class="run-column">
@@ -54,6 +54,100 @@
       </div>
       <p id="runStatus" class="equity-note" role="status" aria-live="polite"></p>
       <details id="runLogPanel" class="run-log" hidden><summary>Run log</summary><pre id="runLog"></pre></details>
+    </section>
+
+    <section class="panel parquet-panel" id="parquetPanel" hidden aria-labelledby="parquetTitle">
+      <div class="panel-heading">
+        <div><h1 id="parquetTitle" tabindex="-1">Rank a sweep Parquet</h1><p>List and rank base strategy combinations one by one. Entry-time robustness can be kept as an annotation or required for a strict shortlist.</p></div>
+        <button class="secondary-button" id="parquetDoneButton" type="button">Back to backtest</button>
+      </div>
+      <div class="parquet-upload-row">
+        <div>
+          <label for="parquetInput">Sweep Parquet file</label>
+          <input id="parquetInput" type="file" accept=".parquet,application/vnd.apache.parquet" aria-describedby="parquetHelp">
+          <p class="field-help" id="parquetHelp">Raw sweep output is best for verifying robustness. Existing ranked output is also supported, but may not contain nearby entry-time variants.</p>
+        </div>
+        <button class="primary-button" id="inspectParquetButton" type="button">Inspect schema</button>
+      </div>
+      <p class="equity-note" id="parquetStatus" role="status" aria-live="polite"></p>
+
+      <div id="parquetWorkspace" hidden>
+        <div class="schema-summary" aria-label="Parquet schema summary">
+          <div><span>File</span><strong id="schemaFileName">—</strong></div>
+          <div><span>Rows</span><strong id="schemaRowCount">—</strong></div>
+          <div><span>Columns</span><strong id="schemaColumnCount">—</strong></div>
+          <div><span>Validation</span><strong id="schemaReadiness">—</strong></div>
+        </div>
+
+        <div class="schema-layout">
+          <section class="schema-mapping" aria-labelledby="schemaMappingTitle">
+            <div class="section-heading"><h2 id="schemaMappingTitle">Column mapping</h2><p>Automatic matches are preselected. Choose a different source column when names differ.</p></div>
+            <div class="table-scroll schema-table-scroll" tabindex="0" role="region" aria-label="Dashboard field mappings">
+              <table>
+                <thead><tr><th>Dashboard field</th><th>Expected</th><th>Parquet column</th><th>Detected type</th></tr></thead>
+                <tbody id="schemaMappingRows"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <aside class="validation-report" aria-labelledby="validationReportTitle">
+            <div class="section-heading"><h2 id="validationReportTitle">Validation report</h2><p id="validationSummary">Inspect a file to see its status.</p></div>
+            <div class="validation-counts"><span id="validationErrorCount">0 errors</span><span id="validationWarningCount">0 warnings</span></div>
+            <ul id="validationIssues"></ul>
+          </aside>
+        </div>
+        <section class="filter-panel" aria-labelledby="filterTitle">
+          <div class="section-heading"><h2 id="filterTitle">Eligibility filters</h2><p>These settings remove combinations before ranking. Leave an optional field empty to ignore it.</p></div>
+          <div class="filter-grid">
+            <label for="filterStatus">Status equals<input id="filterStatus" type="text" value="succeeded" placeholder="For example: succeeded"></label>
+            <label for="filterMinimumPnl">Net P&amp;L greater than<input id="filterMinimumPnl" type="number" value="0" step="any"></label>
+            <label for="filterMaximumPnl">Maximum net P&amp;L<input id="filterMaximumPnl" type="number" step="any" placeholder="No maximum"></label>
+            <label for="filterMaximumDrawdown">Maximum drawdown<input id="filterMaximumDrawdown" type="number" min="0" step="any" placeholder="No maximum"></label>
+            <label for="filterLatestEntry">Latest entry time<input id="filterLatestEntry" type="time" value="10:00"></label>
+            <label for="filterMinimumTrades">Minimum completed trades<input id="filterMinimumTrades" type="number" min="0" step="1" placeholder="Not mapped"></label>
+          </div>
+          <label class="robustness-toggle" for="requireEntryRobustness"><input id="requireEntryRobustness" type="checkbox"><span><strong>Require entry-time robustness</strong><small>When enabled, only retain rows with a passing Before, After, or Both result. Leave it off to list every base combination and show robustness as an annotation.</small></span></label>
+          <section class="ranking-builder" aria-labelledby="rankingBuilderTitle">
+            <div class="section-heading"><h3 id="rankingBuilderTitle">Ranking builder</h3><p>Choose up to six numeric metrics. Weights must add up to 100%; direction decides whether higher or lower values rank first.</p></div>
+            <div class="ranking-builder-rows" id="rankingBuilderRows"></div>
+            <div class="ranking-builder-actions"><button class="secondary-button" id="addRankingCriterion" type="button">Add criterion</button><p id="rankingBuilderStatus" role="status" aria-live="polite"></p></div>
+          </section>
+          <section class="ranking-presets" aria-labelledby="rankingPresetsTitle">
+            <div class="section-heading"><h3 id="rankingPresetsTitle">Saved ranking presets</h3><p>Store this mapping, filter, and ranking setup in this browser for repeated sweep analysis.</p></div>
+            <div class="ranking-presets-controls"><label for="rankingPresetName">Preset name<input id="rankingPresetName" type="text" maxlength="64" placeholder="For example: Conservative 10:00"></label><button class="secondary-button" id="saveRankingPreset" type="button">Save preset</button><label for="rankingPresetSelect">Saved preset<select id="rankingPresetSelect"><option value="">Choose a preset</option></select></label><button class="secondary-button" id="loadRankingPreset" type="button">Load preset</button><button class="text-button" id="deleteRankingPreset" type="button">Delete</button></div>
+            <p class="ranking-preset-status" id="rankingPresetStatus" role="status" aria-live="polite"></p>
+          </section>
+          <div class="filter-actions"><button class="secondary-button" id="filterPreviewButton" type="button">Preview base combinations</button><button class="primary-button" id="rankSweepButton" type="button">Rank combinations</button><p id="filterPreviewStatus" role="status" aria-live="polite"></p></div>
+          <div class="rank-progress" id="rankProgress" hidden aria-live="polite"><progress id="rankProgressMeter" max="100" value="0">0%</progress><div><strong id="rankProgressLabel">Preparing ranking…</strong><span id="rankProgressElapsed">Elapsed 0s</span></div></div>
+        </section>
+        <section class="ranked-sweep" id="rankedSweep" hidden aria-labelledby="rankedSweepTitle">
+          <div class="section-heading ranked-sweep-heading"><div><h2 id="rankedSweepTitle">Top 20 ranked combinations</h2><p id="rankedSweepSummary" role="status" aria-live="polite"></p></div><div class="ranked-export-actions" aria-label="Export ranked combinations"><button class="secondary-button" id="exportRankedCsv" type="button">Export CSV</button><button class="secondary-button" id="exportRankedParquet" type="button">Export Parquet</button><button class="secondary-button" id="exportRankedExcel" type="button">Export Excel</button></div></div>
+          <p class="robustness-legend"><strong>Robustness:</strong> Tests every available earlier or later entry-time variant within 20 minutes. Before, After, and Both indicate a passing side; rows without variants are marked Not confirmed. Enable the strict filter above only when this check should remove rows.</p>
+          <details class="run-summary" id="runSummary"><summary>Reproducible run summary</summary><p>Capture of the exact input, mapping, filters, ranking, and robustness rule used for this result.</p><dl id="runSummaryRows"></dl><button class="secondary-button" id="copyRunSummary" type="button">Copy summary</button><span id="copyRunSummaryStatus" role="status" aria-live="polite"></span></details>
+          <section class="sweep-charts" aria-labelledby="sweepChartsTitle">
+            <div class="section-heading"><h3 id="sweepChartsTitle">Ranked strategy analysis</h3><p>Charts use the displayed top combinations; robustness distribution covers every eligible combination.</p></div>
+            <div class="sweep-chart-grid">
+              <figure><figcaption>P&amp;L versus drawdown</figcaption><div class="chart-shell sweep-chart" id="sweepScatterChart" role="img" tabindex="0"></div></figure>
+              <figure><figcaption>Yearly P&amp;L by rank</figcaption><div class="chart-shell sweep-chart" id="sweepYearlyChart" role="img" tabindex="0"></div><p class="sweep-chart-legend"><span>2025</span><span>2026</span></p></figure>
+              <figure><figcaption>Robustness distribution</figcaption><div class="chart-shell sweep-chart" id="sweepDistributionChart" role="img" tabindex="0"></div></figure>
+            </div>
+          </section>
+          <div class="table-scroll ranked-sweep-table" tabindex="0" role="region" aria-label="Ranked sweep combinations">
+            <table>
+              <thead id="rankedSweepHead"></thead>
+              <tbody id="rankedSweepRows"></tbody>
+            </table>
+          </div>
+          <section class="strategy-detail" id="strategyDetail" hidden aria-labelledby="strategyDetailTitle">
+            <div class="section-heading"><div><h3 id="strategyDetailTitle" tabindex="-1">Strategy combination detail</h3><p id="strategyDetailSummary"></p></div><button class="secondary-button" id="closeStrategyDetail" type="button">Close details</button></div>
+            <div class="strategy-detail-grid">
+              <div><h4>Ranking components</h4><div class="table-scroll strategy-components-table" tabindex="0" role="region" aria-label="Ranking components"><table><thead><tr><th>Metric</th><th class="numeric">Value</th><th>Direction</th><th class="numeric">Weight</th><th class="numeric">Score</th><th class="numeric">Contribution</th></tr></thead><tbody id="strategyComponentsRows"></tbody></table></div></div>
+              <div><h4>All strategy parameters</h4><dl class="strategy-parameters" id="strategyParameters"></dl></div>
+            </div>
+          </section>
+        </section>
+        <p class="schema-note">Columns not mapped above remain available as strategy parameters and can be shown in the ranked combinations table.</p>
+      </div>
     </section>
     <section class="panel storage-panel" id="storagePanel" hidden aria-labelledby="storageTitle">
       <div class="panel-heading">
@@ -103,15 +197,9 @@
     <div class="upload-status" id="uploadStatus" role="status" aria-live="polite" aria-atomic="true"></div>
     <section class="upload-view" id="uploadView" aria-labelledby="uploadTitle" hidden>
       <div class="upload-copy">
-        <p class="context-label">Independent backtest review</p>
-        <h1 id="uploadTitle">Understand the return.<br>Inspect the risk.</h1>
-        <p>Bring your backtest’s trade log into a focused workspace for performance, drawdown and consistency.</p>
-        <ul class="trust-list" aria-label="Processing guarantees">
-          <li><span aria-hidden="true">✓</span> No LLM-generated P&amp;L</li>
-          <li><span aria-hidden="true">✓</span> Your file stays on this device</li>
-          <li><span aria-hidden="true">✓</span> Exact schema validation before analysis</li>
-        </ul>
-        <div class="upload-guide"><h2>Start with your executions</h2><p><strong>trades.csv</strong> unlocks realised performance and batch analysis.</p><p><strong>equity.csv</strong> can be added next to inspect intraday losses while positions were open.</p></div>
+        <h1 id="uploadTitle">Upload trades CSV</h1>
+        <p>Review performance, drawdown, and consistency from a completed trade log.</p>
+        <div class="upload-guide"><p><strong>trades.csv</strong> is required. Add <strong>equity.csv</strong> afterwards to analyse intraday losses while positions were open.</p></div>
       </div>
 
       <div class="drop-zone" id="dropZone">
@@ -291,8 +379,8 @@
     </section>
   </main>
 
-  <footer>Analytics are calculated from uploaded executions and are not financial advice.</footer>
-  <script src="/app.js" defer></script>
-  <script src="/runner.js" defer></script>
+  <footer>Trade-log Analytics</footer>
+  <script src="/app.js?v=20260928-3" defer></script>
+  <script src="/runner.js?v=20260928-3" defer></script>
 </body>
 </html>
