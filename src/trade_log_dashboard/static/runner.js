@@ -328,7 +328,105 @@ function readSweepFilters() {
     maximum_drawdown: $("filterMaximumDrawdown").value,
     latest_entry: $("filterLatestEntry").value,
     minimum_trades: $("filterMinimumTrades").value,
+    parameter_filters: readParameterFilters(),
   };
+}
+
+function parameterFilterDefinitions() {
+  return Object.entries(inspectedParquet?.filter_options || {}).map(([name, definition]) => ({name, label: parameterColumnLabel(name), ...definition}));
+}
+
+function readParameterFilterDrafts() {
+  return [...document.querySelectorAll("[data-parameter-filter-row]")].map(row => {
+    const column = row.querySelector("[data-parameter-column]")?.value || "";
+    const definition = inspectedParquet?.filter_options?.[column];
+    const control = row.querySelector("[data-parameter-value]");
+    const values = control?.multiple ? [...control.selectedOptions].map(option => option.value).filter(Boolean) : [control?.value || ""].filter(Boolean);
+    if (!column || !definition || !values.length) return {column, value: ""};
+    if (definition.mode === "ranges") {
+      const ranges = values.flatMap(value => { try { return [JSON.parse(value)]; } catch (_) { return []; } });
+      return ranges.length ? {column, mode: "ranges", ranges} : {column, value: ""};
+    }
+    return {column, mode: definition.mode === "search" ? "value" : "values", ...(definition.mode === "search" ? {value: values[0]} : {values})};
+  });
+}
+
+function readParameterFilters() {
+  return readParameterFilterDrafts().filter(filter => filter.column && (filter.mode === "range" || filter.mode === "ranges" || filter.mode === "values" || String(filter.value || "").trim()));
+}
+
+function parameterFilterValueKey(value) {
+  return value && typeof value === "object" ? JSON.stringify(value) : String(value ?? "");
+}
+
+function parameterFilterSelectionCount() {
+  return readParameterFilters().reduce((count, filter) => count + (filter.values?.length || filter.ranges?.length || 1), 0);
+}
+
+function updateParameterFilterStatus() {
+  const count = parameterFilterSelectionCount();
+  const definitions = parameterFilterDefinitions();
+  $("parameterFilterStatus").textContent = definitions.length
+    ? count ? `${count} parameter value${count === 1 ? "" : "s"} selected. Multiple values in one column are matched together.` : "No parameter filters selected. All swept values remain eligible."
+    : "No strategy parameter fields were detected in this Parquet file.";
+}
+
+function renderParameterFilters(drafts = null) {
+  const container = $("parameterFilterRows");
+  if (!container || !inspectedParquet) return;
+  const definitions = parameterFilterDefinitions();
+  const rows = drafts || readParameterFilterDrafts();
+  const effectiveRows = rows.length ? rows : [{}];
+  const options = definitions.map(definition => ({value: definition.name, label: definition.label}));
+  const rendered = effectiveRows.map((draft, rowIndex) => {
+    const row = document.createElement("div");
+    row.className = "parameter-filter-row";
+    row.dataset.parameterFilterRow = "1";
+    const column = document.createElement("select");
+    column.dataset.parameterColumn = "1";
+    column.setAttribute("aria-label", "Strategy parameter column");
+    column.append(new Option("Choose a swept parameter", ""));
+    options.forEach(option => column.append(new Option(option.label, option.value)));
+    column.value = options.some(option => option.value === draft.column) ? draft.column : "";
+    const definition = inspectedParquet.filter_options?.[column.value];
+    const valueControl = document.createElement(definition?.mode === "search" ? "input" : "select");
+    valueControl.dataset.parameterValue = "1";
+    valueControl.setAttribute("aria-label", "Strategy parameter value");
+    if (definition?.mode === "search") {
+      valueControl.type = "search";
+      valueControl.placeholder = "Type an exact value";
+      valueControl.value = draft.mode === "value" ? draft.value || "" : "";
+    } else {
+      valueControl.multiple = Boolean(definition);
+      valueControl.size = 1;
+      valueControl.title = definition ? "Hold Ctrl (Windows) or Cmd (Mac) to select more than one option." : "";
+      valueControl.append(new Option(definition ? definition.mode === "ranges" ? "Choose numeric ranges" : "Choose values" : "Choose a parameter first", ""));
+      (definition?.values || []).forEach(option => {
+        const value = definition.mode === "ranges" ? JSON.stringify({min: option.min, max: option.max, include_max: option.include_max}) : option.value;
+        valueControl.append(new Option(option.label, value));
+      });
+      const selectedValues = definition?.mode === "ranges"
+        ? (draft.mode === "ranges" ? draft.ranges : draft.mode === "range" ? [draft] : []).map(range => parameterFilterValueKey({min: range.min, max: range.max, include_max: range.include_max}))
+        : (draft.mode === "values" ? draft.values : draft.mode === "value" ? [draft.value] : []);
+      const selected = new Set(selectedValues);
+      [...valueControl.options].forEach(option => { option.selected = selected.has(option.value); });
+    }
+    valueControl.disabled = !definition;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "text-button";
+    remove.textContent = "Remove";
+    remove.disabled = effectiveRows.length === 1;
+    remove.addEventListener("click", () => { const next = readParameterFilterDrafts(); next.splice(rowIndex, 1); renderParameterFilters(next); });
+    column.addEventListener("change", () => { const next = readParameterFilterDrafts(); next[rowIndex] = {column: column.value, value: ""}; renderParameterFilters(next); });
+    valueControl.addEventListener("input", updateParameterFilterStatus);
+    valueControl.addEventListener("change", updateParameterFilterStatus);
+    row.append(column, valueControl, remove);
+    return row;
+  });
+  container.replaceChildren(...rendered);
+  $("addParameterFilter").disabled = !definitions.length;
+  updateParameterFilterStatus();
 }
 
 function savedRankingPresets() {
@@ -542,6 +640,7 @@ function renderSchemaInspection(payload) {
   });
   $("schemaMappingRows").replaceChildren(...rows);
   $("parquetWorkspace").hidden = false;
+  renderParameterFilters();
   renderRankingBuilder();
   renderRankingPresets();
   validateSchemaMapping();
@@ -662,7 +761,69 @@ function renderRankedSweepHeader(parameterColumns) {
   const details = document.createElement("th");
   details.innerHTML = '<span class="sr-only">Details</span>';
   headerRow.append(details);
-  $("rankedSweepHead").replaceChildren(headerRow);
+  const filterRow = document.createElement("tr");
+  filterRow.className = "ranked-column-filters";
+  fixedHeaders.forEach(() => filterRow.append(document.createElement("th")));
+  parameterColumns.forEach(key => {
+    const cell = document.createElement("th");
+    cell.className = "parameter-column-filter";
+    const select = document.createElement("select");
+    select.dataset.rankedParameterFilter = key;
+    select.setAttribute("aria-label", `Filter ${parameterColumnLabel(key)}`);
+    const definition = inspectedParquet?.filter_options?.[key];
+    select.append(new Option(`All ${parameterColumnLabel(key)}`, ""));
+    if (definition?.mode === "search") {
+      const input = document.createElement("input");
+      input.type = "search";
+      input.dataset.rankedParameterFilter = key;
+      input.placeholder = `Search ${parameterColumnLabel(key)}`;
+      input.setAttribute("aria-label", `Filter ${parameterColumnLabel(key)}`);
+      cell.replaceChildren(input);
+      filterRow.append(cell);
+      return;
+    }
+    select.multiple = Boolean(definition);
+    select.size = 1;
+    select.title = definition ? "Hold Ctrl (Windows) or Cmd (Mac) to select more than one option." : "";
+    (definition?.values || []).forEach(option => {
+      const value = definition.mode === "ranges" ? JSON.stringify({min: option.min, max: option.max, include_max: option.include_max}) : option.value;
+      select.append(new Option(option.label, value));
+    });
+    const selected = readParameterFilters().find(filter => filter.column === key);
+    const selectedValues = selected?.mode === "ranges"
+      ? selected.ranges.map(range => JSON.stringify({min: range.min, max: range.max, include_max: range.include_max}))
+      : selected?.mode === "values" ? selected.values : selected?.value ? [selected.value] : [];
+    const selectedSet = new Set(selectedValues);
+    [...select.options].forEach(option => { option.selected = selectedSet.has(option.value); });
+    select.addEventListener("change", () => {
+      $("rankedColumnFilterStatus").textContent = `${rankedFilterSelectionCount()} parameter values staged. Click Apply filters & rerank.`;
+    });
+    cell.append(select);
+    filterRow.append(cell);
+  });
+  const actionCell = document.createElement("th");
+  actionCell.className = "parameter-column-filter-note";
+  actionCell.textContent = parameterColumns.length ? "Select values, then apply" : "";
+  filterRow.append(actionCell);
+  $("rankedSweepHead").replaceChildren(headerRow, filterRow);
+}
+
+function readRankedColumnFilters() {
+  return [...document.querySelectorAll("[data-ranked-parameter-filter]")].flatMap(control => {
+    const column = control.dataset.rankedParameterFilter;
+    const values = control.multiple ? [...control.selectedOptions].map(option => option.value).filter(Boolean) : [control.value?.trim?.() || ""].filter(Boolean);
+    if (!column || !values.length) return [];
+    const definition = inspectedParquet?.filter_options?.[column];
+    if (definition?.mode === "ranges") {
+      const ranges = values.flatMap(value => { try { return [JSON.parse(value)]; } catch (_) { return []; } });
+      return ranges.length ? [{column, mode: "ranges", ranges}] : [];
+    }
+    return [{column, mode: "values", values}];
+  });
+}
+
+function rankedFilterSelectionCount() {
+  return readRankedColumnFilters().reduce((count, filter) => count + (filter.values?.length || filter.ranges?.length || 1), 0);
 }
 
 function robustnessLabel(value, beforeCount = 0, afterCount = 0) {
@@ -883,6 +1044,7 @@ function renderRankedSweep(payload) {
   const robustnessRequired = Boolean(payload.run_summary?.entry_robustness?.required);
   const parameterColumns = rankedParameterColumns(payload.rows || []);
   renderRankedSweepHeader(parameterColumns);
+  $("rankedTableToolbar").hidden = !parameterColumns.length;
   const rankingDescription = (payload.ranking || []).map(criterion =>
     `${criterion.weight}% ${criterion.label} (${criterion.direction === "higher" ? "higher" : "lower"} is better)`
   ).join(" · ");
@@ -1092,6 +1254,15 @@ $("copyRunSummary").addEventListener("click", copyRunSummary);
 $("exportRankedCsv").addEventListener("click", () => exportRankedSweep("csv"));
 $("exportRankedParquet").addEventListener("click", () => exportRankedSweep("parquet"));
 $("exportRankedExcel").addEventListener("click", () => exportRankedSweep("xlsx"));
+$("applyRankedColumnFilters").addEventListener("click", () => {
+  renderParameterFilters(readRankedColumnFilters());
+  rankSweep();
+});
+$("addParameterFilter").addEventListener("click", () => {
+  const drafts = readParameterFilterDrafts();
+  drafts.push({});
+  renderParameterFilters(drafts);
+});
 $("saveRankingPreset").addEventListener("click", saveRankingPreset);
 $("loadRankingPreset").addEventListener("click", loadRankingPreset);
 $("deleteRankingPreset").addEventListener("click", deleteRankingPreset);

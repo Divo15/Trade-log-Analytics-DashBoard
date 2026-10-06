@@ -40,6 +40,93 @@ PRE_RANKED_MARKER_COLUMNS = {
     "prior_robust_ratio", "after_robust_ratio", "robustness_ratio", "entry_robust_side",
 }
 
+_RESULT_COLUMN_NAMES = {
+    "status", "win_rate", "worst_day_pnl", "max_consecutive_losses", "final_score", "rank",
+    "max_loss", "entry_minutes", "prior_min", "after_min", "drawdown_risk", "max_loss_risk",
+    "reentry_burden", "prior_robust_ratio", "after_robust_ratio", "robustness_ratio",
+    "entry_robust_side",
+}
+_RESULT_COLUMN_SUFFIXES = ("_count", "_pnl", "_roi", "_dd", "_drawdown", "_score")
+
+
+def _is_result_column(name: str) -> bool:
+    normalised = _normalise(name)
+    return (
+        normalised in {_normalise(item) for item in _RESULT_COLUMN_NAMES}
+        or normalised.endswith(tuple(_normalise(item) for item in _RESULT_COLUMN_SUFFIXES))
+        or bool(re.fullmatch(r"(?:pnl|roi|mtmdd|drawdown)\d{4}(?:pct)?", normalised))
+    )
+
+
+def _parameter_filter_clauses(parameter_filters: Any, columns: dict[str, dict[str, Any]], identifier) -> tuple[list[str], list[Any]]:
+    """Build exact-value or numeric-range filters; values in one column are ORed."""
+    if parameter_filters in (None, ""):
+        return [], []
+    items = parameter_filters if isinstance(parameter_filters, list) else [
+        {"column": name, "mode": "value", "value": value} for name, value in parameter_filters.items()
+    ] if isinstance(parameter_filters, dict) else None
+    if items is None:
+        raise ValueError("Combination filters must be a list of selected values or ranges.")
+    exact_values: dict[str, list[str]] = {}
+    numeric_ranges: dict[str, list[tuple[float, float, bool]]] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("Each combination filter must be an object.")
+        name = str(item.get("column", "")).strip()
+        mode = str(item.get("mode", "value")).strip().lower()
+        if not name:
+            continue
+        if name not in columns:
+            raise ValueError(f'Combination filter column "{name}" is not present in this Parquet file.')
+        column = columns[name]
+        if mode in {"range", "ranges"}:
+            if column["category"] != "numeric":
+                raise ValueError(f'Range filters are only available for numeric column "{name}".')
+            raw_ranges = item.get("ranges") if mode == "ranges" else [item]
+            if not isinstance(raw_ranges, list) or not raw_ranges:
+                raise ValueError(f'Range filter for "{name}" is invalid.')
+            for raw_range in raw_ranges:
+                try:
+                    minimum, maximum = float(raw_range["min"]), float(raw_range["max"])
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ValueError(f'Range filter for "{name}" is invalid.') from exc
+                if minimum > maximum:
+                    raise ValueError(f'Range filter for "{name}" must have its minimum before its maximum.')
+                numeric_ranges.setdefault(name, []).append((minimum, maximum, bool(raw_range.get("include_max", False))))
+            continue
+        if mode not in {"value", "values"}:
+            raise ValueError(f'Filter mode for "{name}" must be value, values, range, or ranges.')
+        raw_values = item.get("values") if mode == "values" else item.get("value", "")
+        selected = raw_values if isinstance(raw_values, list) else str(raw_values).split(",")
+        exact_values.setdefault(name, []).extend(str(value).strip() for value in selected if str(value).strip())
+
+    clauses, values = [], []
+    for name, selected in exact_values.items():
+        selected = list(dict.fromkeys(selected))
+        if not selected:
+            continue
+        if columns[name]["category"] == "numeric":
+            try:
+                numeric = [float(value.replace("%", "")) for value in selected]
+            except ValueError as exc:
+                raise ValueError(f'Filter for "{name}" must contain numeric values.') from exc
+            clauses.append(f"TRY_CAST({identifier(name)} AS DOUBLE) IN ({', '.join('?' for _ in numeric)})")
+            values.extend(numeric)
+        else:
+            clauses.append(f"lower(CAST({identifier(name)} AS VARCHAR)) IN ({', '.join('lower(?)' for _ in selected)})")
+            values.extend(selected)
+    for name, ranges in numeric_ranges.items():
+        range_clauses = []
+        for minimum, maximum, include_max in ranges:
+            operator = "<=" if include_max else "<"
+            range_clauses.append(
+                f"(TRY_CAST({identifier(name)} AS DOUBLE) >= ? AND TRY_CAST({identifier(name)} AS DOUBLE) {operator} ?)"
+            )
+            values.extend([minimum, maximum])
+        if range_clauses:
+            clauses.append("(" + " OR ".join(range_clauses) + ")")
+    return clauses, values
+
 
 def _export_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Flatten ranked combinations while retaining every parameter and score component."""
@@ -168,7 +255,67 @@ def _suggest(field: dict[str, Any], columns: list[dict[str, Any]], used: set[str
     return (best_name, "similar") if best_score >= 0.76 else (None, None)
 
 
-def inspect_sweep_parquet(path: Path) -> dict[str, Any]:
+def _filter_option_label(value: Any, *, numeric: bool = False) -> str:
+    if value is None:
+        return "—"
+    if numeric:
+        number = float(value)
+        return str(int(number)) if number.is_integer() else f"{number:.6g}"
+    return str(value)
+
+
+def _build_filter_options(path: Path, columns: list[dict[str, Any]], mapped_sources: set[str]) -> dict[str, dict[str, Any]]:
+    """Build exact-value or ten-bucket options for unmapped strategy parameters."""
+    options: dict[str, dict[str, Any]] = {}
+    candidates = [column for column in columns if column["name"] not in mapped_sources
+                  and not _is_result_column(column["name"])
+                  and column["category"] in {"numeric", "text", "time", "boolean"}]
+    connection = duckdb.connect()
+
+    def identifier(name: str) -> str:
+        return '"' + name.replace('"', '""') + '"'
+
+    try:
+        for column in candidates:
+            name, quoted = column["name"], identifier(column["name"])
+            distinct = [row[0] for row in connection.execute(
+                f"SELECT DISTINCT CAST({quoted} AS VARCHAR) FROM read_parquet(?) WHERE {quoted} IS NOT NULL ORDER BY 1 LIMIT 101",
+                [str(path)],
+            ).fetchall()]
+            if len(distinct) <= 100:
+                numeric = column["category"] == "numeric"
+                if numeric:
+                    distinct.sort(key=lambda value: float(value))
+                options[name] = {"mode": "values", "category": column["category"], "values": [
+                    {"label": _filter_option_label(value, numeric=numeric), "value": str(value)} for value in distinct
+                ]}
+                continue
+            if column["category"] != "numeric":
+                options[name] = {"mode": "search", "category": column["category"], "values": []}
+                continue
+            minimum, maximum = connection.execute(
+                f"SELECT min(TRY_CAST({quoted} AS DOUBLE)), max(TRY_CAST({quoted} AS DOUBLE)) FROM read_parquet(?) WHERE {quoted} IS NOT NULL",
+                [str(path)],
+            ).fetchone()
+            if minimum is None or maximum is None or float(minimum) == float(maximum):
+                options[name] = {"mode": "values", "category": column["category"], "values":
+                    [{"label": _filter_option_label(minimum, numeric=True), "value": str(minimum)}] if minimum is not None else []}
+                continue
+            minimum, maximum = float(minimum), float(maximum)
+            width = (maximum - minimum) / 10.0
+            ranges = []
+            for index in range(10):
+                lower = minimum + width * index
+                upper = maximum if index == 9 else minimum + width * (index + 1)
+                ranges.append({"label": f"{_filter_option_label(lower, numeric=True)} – {_filter_option_label(upper, numeric=True)}{' (inclusive)' if index == 9 else ''}",
+                               "min": lower, "max": upper, "include_max": index == 9})
+            options[name] = {"mode": "ranges", "category": column["category"], "values": ranges}
+    finally:
+        connection.close()
+    return options
+
+
+def inspect_sweep_parquet(path: Path, *, include_filter_options: bool = True) -> dict[str, Any]:
     """Read Parquet metadata and return mappings plus a validation report."""
     path = Path(path)
     connection = duckdb.connect()
@@ -271,7 +418,7 @@ def inspect_sweep_parquet(path: Path) -> dict[str, Any]:
         warnings.append({"code": "optional_mapping", "field": "completed_trade_count",
                          "message": "Completed trades is not mapped; trade-count filtering will be unavailable."})
 
-    return {
+    result = {
         "file": {"name": path.name, "size_bytes": path.stat().st_size, "row_count": row_count},
         "columns": columns,
         "fields": fields,
@@ -282,6 +429,9 @@ def inspect_sweep_parquet(path: Path) -> dict[str, Any]:
             "duplicate_columns": duplicates,
         },
     }
+    if include_filter_options:
+        result["filter_options"] = _build_filter_options(path, columns, {source for source in mapping.values() if source})
+    return result
 
 
 def preview_sweep_filters(
@@ -290,7 +440,7 @@ def preview_sweep_filters(
     filters: dict[str, Any],
 ) -> dict[str, Any]:
     """Count rows meeting dashboard filter criteria without loading the sweep into memory."""
-    report = inspect_sweep_parquet(path)
+    report = inspect_sweep_parquet(path, include_filter_options=False)
     columns = {column["name"]: column for column in report["columns"]}
     fields = {field["key"]: field for field in report["fields"]}
 
@@ -382,6 +532,9 @@ def preview_sweep_filters(
             raise ValueError("Map a completed-trades column before applying a trade-count filter.")
         clauses.append(f"CAST({identifier(trade_count)} AS DOUBLE) >= ?")
         values.append(minimum_trades)
+    parameter_clauses, parameter_values = _parameter_filter_clauses(filters.get("parameter_filters"), columns, identifier)
+    clauses.extend(parameter_clauses)
+    values.extend(parameter_values)
 
     query = "SELECT count(*) FROM read_parquet(?)"
     if clauses:
@@ -403,6 +556,7 @@ def preview_sweep_filters(
             "maximum_drawdown": maximum_drawdown,
             "latest_entry": latest_entry or None,
             "minimum_trades": int(minimum_trades) if minimum_trades is not None else None,
+            "parameter_filters": filters.get("parameter_filters") or [],
         },
     }
 
@@ -419,7 +573,7 @@ def rank_sweep_parquet(
     """Apply eligibility and ranking, optionally requiring entry-time robustness."""
     if not 1 <= top_n <= 100:
         raise ValueError("Top-N must be between 1 and 100.")
-    report = inspect_sweep_parquet(path)
+    report = inspect_sweep_parquet(path, include_filter_options=False)
     columns = {column["name"]: column for column in report["columns"]}
     fields = {field["key"]: field for field in report["fields"]}
 
@@ -605,6 +759,9 @@ def rank_sweep_parquet(
     if minimum_trades is not None:
         base_clauses.append(f"CAST({identifier(trade_count)} AS DOUBLE) >= ?")
         values.append(minimum_trades)
+    parameter_clauses, parameter_values = _parameter_filter_clauses(filters.get("parameter_filters"), columns, identifier)
+    base_clauses.extend(parameter_clauses)
+    values.extend(parameter_values)
 
     # Adapt to the sweep's actual entry-time grid. A two-minute sweep tests
     # ten variants per side; a ten-minute sweep tests the available ±10/±20

@@ -345,6 +345,18 @@ td { font-size: 13px; padding-block: 13px; }
 .ranked-sweep-table thead th { background: var(--surface-muted); }
 .ranked-sweep-table th.parameter-column { min-width: 128px; white-space: nowrap; }
 .ranked-sweep-table td.parameter-value { min-width: 128px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ranked-table-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 30px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--surface-muted); color: var(--muted); font-size: 12px; }
+.ranked-table-filter-action { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.ranked-sweep-table thead .ranked-column-filters th { padding: 7px 10px; background: color-mix(in oklch, var(--surface-muted) 82%, var(--surface)); }
+.ranked-column-filters select, .ranked-column-filters input { width: 100%; min-width: 120px; min-height: 38px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font-size: 11px; }
+.ranked-column-filters select[multiple], .parameter-filter-value select[multiple] { cursor: pointer; }
+.ranked-column-filters select[multiple]:focus, .parameter-filter-value select[multiple]:focus { outline: 3px solid color-mix(in oklch, var(--primary) 24%, transparent); outline-offset: 1px; }
+.parameter-filter-rows { display: grid; gap: 10px; }
+.parameter-filter-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr) auto; gap: 10px; align-items: center; }
+.parameter-filter-row select, .parameter-filter-row input { width: 100%; min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font: inherit; }
+.parameter-filter-value select[multiple] { min-height: 40px; }
+.parameter-filter-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+.parameter-filter-actions p { margin: 0; color: var(--muted); font-size: 12px; }
 .robustness-cell { white-space: nowrap; }
 .robustness-badge { display: inline-block; padding: 3px 7px; border-radius: 999px; background: var(--surface-muted); color: var(--ink); font-size: 11px; font-weight: 650; }
 .robustness-both { color: var(--positive); }
