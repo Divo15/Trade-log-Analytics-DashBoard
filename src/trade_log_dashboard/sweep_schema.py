@@ -19,9 +19,9 @@ FIELD_DEFINITIONS: tuple[dict[str, Any], ...] = (
      "aliases": ("status", "result_status", "run_status")},
     {"key": "net_pnl", "label": "Net P&L", "kind": "numeric", "required": True,
      "aliases": ("net_pnl", "total_pnl", "net_profit", "overall_profit", "strategy_pnl")},
-    {"key": "pnl_2025", "label": "2025 P&L", "kind": "numeric", "required": True,
+    {"key": "pnl_2025", "label": "2025 P&L", "kind": "numeric", "required": False,
      "aliases": ("pnl_2025", "net_pnl_2025", "profit_2025", "year_2025_pnl")},
-    {"key": "pnl_2026", "label": "2026 P&L", "kind": "numeric", "required": True,
+    {"key": "pnl_2026", "label": "2026 P&L", "kind": "numeric", "required": False,
      "aliases": ("pnl_2026", "net_pnl_2026", "profit_2026", "year_2026_pnl")},
     {"key": "entry_start", "label": "Entry time", "kind": "time", "required": True,
      "aliases": ("entry_start", "entry_time", "entry", "start_time")},
@@ -446,21 +446,32 @@ def rank_sweep_parquet(
 
     status = source_for("status", required=True)
     net_pnl = source_for("net_pnl", required=True)
-    pnl_2025 = source_for("pnl_2025", required=True)
-    pnl_2026 = source_for("pnl_2026", required=True)
+    pnl_2025 = source_for("pnl_2025")
+    pnl_2026 = source_for("pnl_2026")
     entry = source_for("entry_start", required=True)
     dd_2025 = source_for("mtm_dd_2025")
     dd_2026 = source_for("mtm_dd_2026")
     overall_dd = source_for("mtm_drawdown")
     trade_count = source_for("completed_trade_count")
+    if not pnl_2025 and not pnl_2026:
+        raise ValueError("Map at least one yearly P&L column before ranking.")
     if not overall_dd and not (dd_2025 and dd_2026):
         raise ValueError("Map overall drawdown, or map both 2025 and 2026 drawdown before ranking.")
 
-    raw_criteria = ranking if ranking is not None else [
-        {"column": pnl_2025, "weight": 30, "direction": "higher", "label": "2025 P&L"},
-        {"column": pnl_2026, "weight": 30, "direction": "higher", "label": "2026 P&L"},
-        {"column": "__ranking_drawdown", "weight": 40, "direction": "lower", "label": "Ranking drawdown"},
-    ]
+    if ranking is not None:
+        raw_criteria = ranking
+    elif pnl_2025 and pnl_2026:
+        raw_criteria = [
+            {"column": pnl_2025, "weight": 30, "direction": "higher", "label": "2025 P&L"},
+            {"column": pnl_2026, "weight": 30, "direction": "higher", "label": "2026 P&L"},
+            {"column": "__ranking_drawdown", "weight": 40, "direction": "lower", "label": "Ranking drawdown"},
+        ]
+    else:
+        yearly_pnl = pnl_2025 or pnl_2026
+        raw_criteria = [
+            {"column": yearly_pnl, "weight": 60, "direction": "higher", "label": "Yearly P&L"},
+            {"column": "__ranking_drawdown", "weight": 40, "direction": "lower", "label": "Ranking drawdown"},
+        ]
     if not isinstance(raw_criteria, list) or not raw_criteria or len(raw_criteria) > 6:
         raise ValueError("Choose between one and six ranking criteria.")
     criteria: list[dict[str, Any]] = []
@@ -514,6 +525,13 @@ def rank_sweep_parquet(
     ]
     if not parameter_columns:
         raise ValueError("No strategy-parameter columns were detected for entry-time robustness.")
+    # Some sweep producers write cutoff_time as a duplicate of entry_start.
+    # Keep it in the output, but omit it from the fixed-settings key so that
+    # nearby entry-time variants can be compared.
+    robustness_key_columns = [
+        column for column in parameter_columns
+        if _normalise(column) not in {"cutofftime"}
+    ]
 
     minimum_pnl = number(filters.get("minimum_pnl"), "Minimum P&L")
     maximum_pnl = number(filters.get("maximum_pnl"), "Maximum P&L")
@@ -541,7 +559,7 @@ def rank_sweep_parquet(
         drawdown_expression = f"abs(CAST({identifier(overall_dd)} AS DOUBLE))"
     else:
         drawdown_expression = f"greatest(abs(CAST({identifier(dd_2025)} AS DOUBLE)), abs(CAST({identifier(dd_2026)} AS DOUBLE)))"
-    parameter_key = "hash(" + ", ".join(identifier(column) for column in parameter_columns) + ")"
+    parameter_key = "hash(" + ", ".join(identifier(column) for column in robustness_key_columns) + ")"
     parameter_select = ", ".join(f"any_value({identifier(column)}) AS {identifier(column)}" for column in parameter_columns)
     output_parameters = ", ".join(identifier(column) for column in parameter_columns)
     custom_metric_select = ", ".join(
@@ -553,10 +571,12 @@ def rank_sweep_parquet(
     base_clauses = [
         f"lower(CAST({identifier(status)} AS VARCHAR)) = 'succeeded'",
         f"CAST({identifier(net_pnl)} AS DOUBLE) > 0",
-        f"CAST({identifier(pnl_2025)} AS DOUBLE) IS NOT NULL",
-        f"CAST({identifier(pnl_2026)} AS DOUBLE) IS NOT NULL",
         drawdown_expression + " IS NOT NULL",
     ]
+    if pnl_2025:
+        base_clauses.append(f"CAST({identifier(pnl_2025)} AS DOUBLE) IS NOT NULL")
+    if pnl_2026:
+        base_clauses.append(f"CAST({identifier(pnl_2026)} AS DOUBLE) IS NOT NULL")
     for item in criteria:
         if item["source"] != "ranking_drawdown":
             base_clauses.append(f"CAST({identifier(item['source'])} AS DOUBLE) IS NOT NULL")
@@ -627,8 +647,8 @@ def rank_sweep_parquet(
           SELECT parameter_key, entry_minutes,
                  any_value(CAST({identifier(entry)} AS VARCHAR)) AS entry_start,
                  max(CAST({identifier(net_pnl)} AS DOUBLE)) AS net_pnl,
-                 any_value(CAST({identifier(pnl_2025)} AS DOUBLE)) AS pnl_2025,
-                 any_value(CAST({identifier(pnl_2026)} AS DOUBLE)) AS pnl_2026,
+                 {f'any_value(CAST({identifier(pnl_2025)} AS DOUBLE))' if pnl_2025 else 'NULL::DOUBLE'} AS pnl_2025,
+                 {f'any_value(CAST({identifier(pnl_2026)} AS DOUBLE))' if pnl_2026 else 'NULL::DOUBLE'} AS pnl_2026,
                  any_value(ranking_drawdown) AS ranking_drawdown,
                  {parameter_select}{custom_metric_sql}
             FROM source
@@ -669,21 +689,30 @@ def rank_sweep_parquet(
                  {', '.join(score_selects)}
             FROM eligible
         ),
-        ranked AS (
-          SELECT *, {final_score_expression} AS final_score,
-                 row_number() OVER (ORDER BY {final_score_expression} DESC, net_pnl DESC, ranking_drawdown ASC) AS rank,
-                 count(*) OVER () AS eligible_count,
-                 count(*) FILTER (WHERE entry_robustness = 'before') OVER () AS before_count,
-                 count(*) FILTER (WHERE entry_robustness = 'after') OVER () AS after_count,
-                 count(*) FILTER (WHERE entry_robustness = 'both') OVER () AS both_count,
-                 count(*) FILTER (WHERE entry_robustness = 'not_confirmed') OVER () AS not_confirmed_count
+        score_values AS (
+          SELECT *, {final_score_expression} AS final_score
             FROM scored
+        ),
+        distribution AS (
+          SELECT count(*) AS eligible_count,
+                 count(*) FILTER (WHERE entry_robustness = 'before') AS before_count,
+                 count(*) FILTER (WHERE entry_robustness = 'after') AS after_count,
+                 count(*) FILTER (WHERE entry_robustness = 'both') AS both_count,
+                 count(*) FILTER (WHERE entry_robustness = 'not_confirmed') AS not_confirmed_count
+            FROM score_values
+        ),
+        top_rows AS (
+          SELECT * FROM score_values
+           ORDER BY final_score DESC, net_pnl DESC, ranking_drawdown ASC,
+                    parameter_key ASC, entry_minutes ASC
+           LIMIT {int(top_n)}
         )
-        SELECT rank, final_score, net_pnl, pnl_2025, pnl_2026, ranking_drawdown, entry_start, entry_robustness, before_variant_count, after_variant_count,
+        SELECT row_number() OVER (ORDER BY final_score DESC, net_pnl DESC, ranking_drawdown ASC,
+                                  parameter_key ASC, entry_minutes ASC) AS rank,
+               final_score, net_pnl, pnl_2025, pnl_2026, ranking_drawdown, entry_start, entry_robustness, before_variant_count, after_variant_count,
                eligible_count, before_count, after_count, both_count, not_confirmed_count, {component_select}, {output_parameters}
-          FROM ranked
+          FROM top_rows CROSS JOIN distribution
          ORDER BY rank
-         LIMIT {int(top_n)}
     """
     connection = duckdb.connect()
     try:
@@ -771,6 +800,18 @@ def rank_sweep_parquet(
     result_rows = []
     for row in rows:
         parameters = {column: row.pop(column) for column in parameter_columns}
+        # Expose cutoff separately as well as retaining the original parameter.
+        # This makes it available to fixed dashboard columns and detail views,
+        # even when a sweep producer uses a cutoff alias.
+        cutoff_time = next(
+            (
+                parameters.get(name)
+                for name in ("cutoff_time", "cutoff", "cutoff_point", "cutoff_start")
+                if parameters.get(name) not in (None, "")
+            ),
+            None,
+        )
+        row["cutoff_time"] = cutoff_time
         row.pop("before_count")
         row.pop("after_count")
         row.pop("both_count")

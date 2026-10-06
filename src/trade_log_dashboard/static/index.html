@@ -6,6 +6,7 @@
   <meta name="description" content="Independent analytics for deterministic backtest trade logs">
   <title>Trade-log Analytics</title>
   <link rel="stylesheet" href="/app.css?v=20260928-3">
+  <link rel="stylesheet" href="/research.css?v=20261006-1">
 </head>
 <body>
   <a class="skip-link" href="#mainContent">Skip to content</a>
@@ -16,6 +17,7 @@
     </a>
     <div class="topbar-actions">
       <span class="local-badge">Local workspace</span>
+      <button class="secondary-button" id="researchButton" type="button">Research</button>
       <button class="secondary-button" id="historyButton" type="button">Saved history</button>
       <button class="secondary-button" id="storageButton" type="button">Storage</button>
       <button class="secondary-button" id="backToSweepButton" type="button" hidden>View sweep comparison</button>
@@ -25,6 +27,41 @@
   </header>
 
   <main id="mainContent">
+    <section id="researchPanel" class="panel research-panel" hidden aria-labelledby="researchTitle">
+      <div class="panel-heading"><div><h1 id="researchTitle" tabindex="-1">Strategy research</h1><p>Discover option-selling trade journeys from your market data.</p></div><button class="secondary-button" id="researchBack" type="button">Back to backtest</button></div>
+      <div class="research-layout">
+        <aside class="research-sidebar" aria-label="Research runs">
+          <button class="secondary-button" id="researchNew" type="button">New research</button>
+          <h2>Research runs</h2><p id="researchListStatus" class="field-help" role="status">Loading saved research…</p><div id="researchRunList"></div>
+        </aside>
+        <div class="research-content">
+          <div id="researchSetup">
+            <div class="research-connection"><div><strong>ChatGPT subscription</strong><p id="researchConnection" role="status">Checking Codex sign-in…</p></div><button class="secondary-button" id="researchReconnect" type="button">Check connection</button></div>
+            <form id="researchForm">
+              <label for="researchDataset">Market dataset</label><select id="researchDataset" required><option value="">Choose a dataset</option></select>
+              <p class="field-help">Uses the same dataset catalog as your backtests. Configure folders in Storage.</p>
+              <p class="field-help">Execution settings come from the backtest form. Previous strategy parameters are cleared for new research.</p>
+              <label for="researchObjective">What should the team investigate?</label><textarea id="researchObjective" rows="4" minlength="20" maxlength="6000" required>Discover weekly positional option-selling strategies. Develop the entire trade journey: entry, whether to use SL/TP, exits, same-side or opposite-side re-entry, and when to remain flat. Base each decision on observed data.</textarea>
+              <label for="researchConstraints">Trading constraints and field definitions</label><textarea id="researchConstraints" rows="3" maxlength="8000" placeholder="Holding period, risk and sizing limits, fill assumptions, fees, and any unusual column meanings"></textarea>
+              <p class="field-help">Short positions only; buying to close is allowed. Protective long hedges require explicit authorisation here. Missing essential rules are returned as questions.</p>
+              <div class="research-settings"><div><label for="researchBudget">Maximum agent calls</label><input id="researchBudget" type="number" min="4" max="40" value="12" required><p class="field-help">A call includes planning, execution or review. This limits calls, not tokens or guaranteed cost.</p></div><div><strong>Model routing</strong><p>Astra · research decisions<br>GPT-5.6 Sol · analysis, code and review<br>Local Python · calculations</p></div></div>
+              <p class="execution-note">Runs Codex tasks with your ChatGPT sign-in. Prompts, selected data and results may reach the model service. Plan limits apply. Code executes locally with Codex’s workspace sandbox; review generated strategies before running them in the dashboard.</p>
+              <button id="researchStart" class="primary-button" type="submit" disabled>Start research</button>
+            </form>
+          </div>
+          <div id="researchWorkspace" hidden>
+            <div class="research-run-heading"><div><h2 id="researchRunTitle">Research run</h2><p id="researchRunMeta"></p></div><div class="run-actions"><button id="researchStop" class="secondary-button" type="button" hidden>Stop research</button><button id="researchResume" class="secondary-button" type="button" hidden>Resume research</button></div></div>
+            <div id="researchTeam" class="research-team" aria-label="Agent assignments"></div>
+            <p id="researchRunStatus" role="status" aria-live="polite"></p>
+            <section id="researchCandidate" class="research-candidate" hidden aria-labelledby="researchCandidateTitle"><h3 id="researchCandidateTitle">Candidate ready for review</h3><p>Agent-reviewed research output. This is not independently verified performance or final holdout validation. Inspect the evidence and code before running it.</p><button id="researchHandoff" class="primary-button" type="button">Load candidate into backtest</button></section>
+            <h3>Research journal</h3><p class="field-help">Assignments, findings and objections. Evidence files are linked below each completed task.</p><div id="researchJournal"></div>
+            <details class="research-task-details"><summary>Task outputs and execution logs</summary><div id="researchTasks"></div></details>
+            <form id="researchMessageForm"><label for="researchMessage">Steer the next decision</label><textarea id="researchMessage" rows="2" maxlength="6000" required placeholder="Add a constraint, clarify a field, or request a follow-up investigation"></textarea><p class="field-help">Messages reach the next planning step. Stop research first if a correction must prevent the current task from continuing.</p><button class="secondary-button" type="submit">Send to research lead</button></form>
+          </div>
+          <p id="researchError" class="research-error" role="alert"></p>
+        </div>
+      </div>
+    </section>
     <section class="runner-panel panel" id="runnerPanel" aria-labelledby="runnerTitle">
       <div class="panel-heading"><div><h1 id="runnerTitle">Run a local backtest</h1><p>Upload your Python strategy, connect market data, then review calculated results.</p></div><div class="panel-heading-actions"><button class="secondary-button" id="parquetModeButton" type="button">Rank sweep Parquet</button><button class="secondary-button" id="csvModeButton" type="button">I already have a trades CSV</button></div></div>
       <form id="runForm">
@@ -381,6 +418,7 @@
 
   <footer>Trade-log Analytics</footer>
   <script src="/app.js?v=20260928-3" defer></script>
-  <script src="/runner.js?v=20260928-3" defer></script>
+  <script src="/runner.js?v=20261001-5" defer></script>
+  <script src="/research.js?v=20261006-1" defer></script>
 </body>
 </html>

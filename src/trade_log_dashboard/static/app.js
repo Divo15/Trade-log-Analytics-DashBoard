@@ -123,6 +123,7 @@ function parameterSummary(parameters) {
 }
 
 function render(data, parameters = data.parameters) {
+  window.hideResearch?.();
   state.data = data;
   const { overview, statistics: stats, validation, concentration } = data;
   $("strategyTitle").textContent = overview.strategy;

@@ -1,204 +1,494 @@
-# Trade-log Analytics Dashboard — Handoff
+# SENSEX Backtest, Sweep, Ranking, and Dashboard Handoff
 
-Updated: 10 September 2026 (Asia/Kolkata).
-Workspace: C:\Users\HELLO!\Documents\ChatGPT\Analytics DashBoard
+Updated: 25 September 2026  
+Workspace: `C:\Users\HELLO!\Documents\ChatGPT\Analytics DashBoard`
 
-## Current state
+## 1. Project purpose
 
-This is a local browser dashboard with a Python server and subprocess workers.
-The user explicitly reverted desktop-app/installer work. Do not resume packaging
-or the earlier UI redesign. Portable storage and coverage caching remain.
-At handoff time http://127.0.0.1:8790/api/health refused connection. No server was
-started for this documentation request.
+This project evaluates large numbers of SENSEX DTE-0 options strategy
+combinations. The workflow is split into four stages:
 
-The unresolved issue is execution performance. Several uploads were discussed;
-earlier assistant replies confused them and gave unsupported time estimates.
-Use the actual job request and uploaded source before diagnosing any run.
+1. Load and validate historical SENSEX option-chain data.
+2. Run a strategy backtest or exhaustive parameter sweep.
+3. Persist every combination and its metrics in Parquet, Delta, or DuckDB-compatible output.
+4. Apply transparent filters, rank candidates, and create a small structured review table.
 
-## Git and local changes
+The sweep stage must not silently choose a winner. It should calculate and save
+all requested combinations first. Selection is a separate analytical step.
 
-Branch: codex/strategy-contract-v2-market-data-path
-HEAD: 70adcf5 Document dashboard strategy generation contract
-team remote: https://github.com/Divo15/Trade-log-Analytics-Local.git
-origin remote: https://github.com/Divo15/Trade-log-Analytics-DashBoard.git
+The current output is screening output. It must not be described as AlgoTest
+equivalent until at least one shortlisted combination has been compared with an
+AlgoTest export event by event.
 
-Team main was pushed through 70adcf5 in the previous session. No remote check was
-made today. aea50c1 contains the app/cache/sweep implementation; ddc3f6c documents
-teammate setup.
+## 2. Required operating rules
 
-Current changes:
-- src/trade_log_dashboard/static/runner.js: uncommitted ETA wording.
-- strategies/non.html: untracked user file; purpose not inspected, preserve it.
-- This handoff is local (not listed by git ls-files).
+Read `AGENTS.md` before changing SENSEX execution, sweep, ranking, or AlgoTest
+comparison code. The required reconciliation document is:
 
-Automatic approval review rejected committing/pushing the ETA wording directly
-to team main without explicit shared-branch authorization. The user has not
-answered that permission request. Do not push as part of unrelated work.
+```text
+D:\Backend\static\admin\images\SENSEX_ALGOTEST_EXECUTION_RECONCILIATION.md
+```
 
-## Setup and storage
+The current reconciled assumptions are:
 
-Run setup_environment.cmd once; it creates .venv and installs dependencies from
-pyproject.toml. A separate requirements.txt is unnecessary. Run
-start_dashboard.cmd, optionally with -NoBrowser. tools/start_dashboard.ps1 uses
-the project Python, binds 127.0.0.1 and defaults to port 8790 (-Port overrides).
-Use hidden windows for background starts and verify /api/health afterward.
-Do not restart an active backtest without authorization.
+- A scheduled first entry uses the previous completed candle as its reference.
+- Closest-premium strike selection uses the execution reference candle.
+- A same-timestamp combined re-entry uses the current candle/current ATM.
+- A short-option leg stop-loss trigger uses the candle high.
+- A leg stop-loss fills at the stop threshold, not at candle close.
+- Combined stop-loss and target exits close remaining legs at the current candle close.
+- Same-timestamp combined re-entry is allowed when re-entry is available.
+- Net AlgoTest comparison uses 0.5% slippage: short entry is adjusted down and short exit is adjusted up.
+- Use the platform-matched exit bar, preferably 15:14 when that is the matched bar, instead of blindly assuming 15:15.
+- Compare only common 0DTE dates available in both datasets.
 
-Datasets and .venv are excluded from Git. Teammates must get the dataset separately,
-set up their environment and configure their own parent folder through Storage.
-The parent contains nifty current week, next week, next2week and nifty monthly.
-Recent local runs selected data/db/nifty current week: 2 January 2023 through
-5 May 2026, 760 trading dates. These are local Parquet files, not GitHub downloads.
+Do not claim parity from headline P&L alone. Compare selected strikes,
+timestamps, prices, exit reasons, re-entries, daily P&L, total P&L, trade count,
+and win rate.
 
-Default persistent root: %LOCALAPPDATA%\TradeLogAnalytics, containing settings,
-logs, cache and results. Settings: settings/settings.json. Dataset precedence:
-TRADE_LOG_DATA_ROOT, saved path, project data/db, then user-storage datasets.
-Coverage metadata persists and refreshes when source files change.
+## 3. Repository map
 
-## Skill and strategy contract
+### Backtest and sweep
 
-Installed skill:
-D:\CodexData\.codex\skills\dashboard-strategy-author\SKILL.md
-Source: https://github.com/Divo15/codex-backtest-strategy-skill
+- `databricks_sensex_exhaustive_sweep.py` — primary Databricks exhaustive sweep implementation.
+- `databricks_sensex_exhaustive_sweep_combined_and_leg.py` — related combined-and-leg implementation; use only when explicitly required.
+- `nifty_protected_straddle_colab_CLEAN.py` — older/general Colab strategy file, not the primary SENSEX sweep source.
+- `strategies/` — dashboard-compatible or standalone strategy modules.
 
-The skill repository was made PUBLIC at the user's request on 9 September.
-Do not confuse its visibility with the private team project repository.
-Source and installed checkout updated to 31dbd60, removing the obsolete 500 cap.
-Read this skill and referenced contract/checklist for strategy work.
+### Ranking and selection
 
-Require STRATEGY_CONTRACT_VERSION='2', run_strategy(context), and RUN_MODE='single'
-or 'sweep' with SWEEP_PARAMETER_SETS. Data must come from context.market_data.
-Preserve entries, exits, sizing, hedges and fill assumptions. Return raw completed
-trades and true engine-observed snapshots; dashboard owns exports and analytics.
-Sweeps must be deterministic because recommendations are rerun. User explicitly
-requires authorization before running strategies, installing their dependencies
-or changing trading logic.
+- `sensex_yearly_selection_sorter.py` — main DuckDB-based yearly sorter with dynamic yearly fields, entry-time filtering, ranking, and clean CSV output.
+- `kaggle_sensex_sort_results.py` — earlier Kaggle-oriented sorter; check its default path before reuse.
+- `databricks_sensex_sort_results.py` — Spark/PySpark ranking implementation for Databricks tables.
+- `rank_best_pnl_with_risk_floor.py` — highest-P&L ranking with drawdown and 23% leg-SL limits.
+- `rank_best_pnl_with_dd_floor.py` — highest-P&L ranking with a drawdown limit only.
+- `rank_by_pnl_only.py` — simple P&L-only ranking.
+- `structure_sensex_output.py` — creates a clean top-N table from sorter CSV output.
 
-Project docs: integration/DASHBOARD_STRATEGY_GENERATION_PROMPT.md and
-integration/STRATEGY_SCRIPT_CONTRACT.md. The Colab workflow is separate. Some
-PRODUCT/design-era prose still describes reverted desktop packaging and is stale.
+### Documentation and validation
 
-## Architecture and optimization limits
+- `AGENTS.md` — project instructions and SENSEX reconciliation rules.
+- `ARCHITECTURE.md` — local dashboard architecture.
+- `README.md` — local dashboard setup and usage.
+- `LIMITATIONS.md` — known dashboard limitations.
+- `integration/STRATEGY_SCRIPT_CONTRACT.md` — Strategy Contract v2.
+- `integration/EQUITY_SNAPSHOT_CONTRACT.md` — equity snapshot requirements.
+- `integration/SWEEP_SUMMARY_CONTRACT.md` — sweep output requirements.
+- `tests/test_sensex_selection.py` — selection tests.
+- `tests/test_sensex_precomputed_selection.py` — precomputed-output tests.
 
-server.py: local endpoints/static assets/storage settings.
-runner.py: uploads, subprocess lifecycle, timeouts, status, history and reruns.
-worker.py: imports uploaded code and dispatches the supported interface.
-market_data.py: optional worker-owned shared cache.
-legacy.py: standalone StrategyConfig/DataLoader/ProtectedStraddleBacktester adapter.
-analytics.py, equity.py and exporter package: validation and independent reports.
-All dashboard modules are under src/trade_log_dashboard.
+Generated examples include `sensex_yearly_ranked.parquet`,
+`sensex_yearly_top100.csv`, `sensex_yearly_structured_top20.csv`, and their
+`*_verified`/`*_new` variants. These are outputs, not source code.
 
-One active job at a time. Single timeout 30 minutes; sweep timeout seven days.
-No fixed combination count limit. Latest five jobs are temporary per server
-session. Only recommended winners persist. Sweep rows retain compact metrics;
-recommended/manual selections rerun for full artifacts.
+## 4. End-to-end data flow
 
-The worker supplies one context.market_data_loader per job. Defaults: 128 MiB
-prepared-frame memory cache and 2 GiB disk cache. read_frame can reread cached
-Parquet; prepare_frame fingerprints inputs and returns copies. This cache is
-not persistent across jobs or winner reruns and does not automatically speed up
-arbitrary scripts. Callers must use it. legacy.py currently does not use it.
+```text
+Historical option-chain Parquet
+        |
+        v
+Databricks/Spark or local strategy engine
+        |
+        v
+Raw sweep result: one row per parameter combination
+        |
+        v
+Yearly enrichment: pnl_YYYY, roi_YYYY_pct, mtm_dd_YYYY
+        |
+        v
+DuckDB/Spark screening and ranking
+        |
+        +--> ranked Parquet with analytical fields
+        +--> clean top-100 CSV
+        +--> clean structured top-20 CSV
+        |
+        v
+Shortlist review and AlgoTest-equivalent rerun
+```
 
-## Verified performance investigation, 9 September
+Raw results should retain strategy parameters and audit metrics. The clean CSV
+is intentionally smaller and excludes internal score fields unless requested.
 
-Temporary root was D:\CodexData\Temp\local-backtests-5x1u853n.
-Files may disappear after cleanup; check availability.
+## 5. Dataset and coverage
 
-### 60-combination script
+The local market data is under:
 
-Job bec187fede924dc1b3697bb16ec1ae8c:
-nifty_6DTE_weekly_hard_sl_tp_two_reentries.py, 60 combinations, one 65-unit lot,
-four legs. Cancelled. Initially mistaken for the teammate's different upload.
+```text
+data\db\sensex current week\
+```
 
-### Premium-selection script
+Expected layout:
 
-Source: D:\Backend\static\admin\images\dashboard_e1r1_premium_selection_sweep.py
-Jobs: 12980ce0e03e4bb5912f155a7eaa2633 and a42142616bdf493c974c09957534ca61.
-Five combinations (10, 15, 20, 25, 30 percent), LOT_SIZE=65, MAX_ACTIVE_SLOTS=1.
-Filters DTE=0; choose Weekly/current expiry. Four-slot wording is misleading.
+```text
+sensex_summary.parquet
+sensex_chain\part_YYYY_MM.parquet
+```
 
-Observed first job: combination 1/5 still incomplete after ~21 minutes,
-~1264 CPU seconds and 4.16 GiB working set. No stack/phase profile was captured.
-CPU use alone does not prove useful progress or locate the bottleneck.
+The local dataset contains monthly chain files for 2024, 2025, and 2026, but
+each year may be partial. Always inspect the manifest and filenames before
+reporting the number of months.
 
-Code concerns:
-- Loads all Parquet rows on every variation.
-- Applies scalar pd.to_datetime through map(_parse_datetime) BEFORE filtering
-  DTE=0. This is a plausible major initial bottleneck, not yet measured.
-- Scans chain by day, pivots CE/PE matrices, prepares forward fills and selects
-  strikes minute by minute; retains prepared days in a list.
-- Never calls context.market_data_loader.
+An older result file, `sensex_full_sweep_with_yearly.parquet`, contained
+897,750 rows and was not the full planned Cartesian sweep. It included yearly
+fields such as `pnl_2024`, `pnl_2025`, `pnl_2026`, `mtm_dd_2024`,
+`mtm_dd_2025`, and `mtm_dd_2026`. Do not call a result from that file the
+winner of a newer sweep.
 
-Additional correctness concerns visible in reviewed code, not fixed/tested:
-- close_slot checks reason 'SL' to schedule reentry, but callers pass
-  'COMBINED_SL'; declared stop-loss reentry appears unreachable.
-- _run_day resets realized P&L each day; run_strategy concatenates snapshots
-  without cumulative offsets. This may fail reconciliation and misstate equity.
-Do not claim full compatibility merely because the entry point exists.
-No edits were made to this script. Previous 1–1.5-hour/2-hour ETAs were speculative.
+## 6. Planned exhaustive sweep grid
 
-### Latest standalone run completed
+The full requested grid in the primary Databricks sweep is:
 
-Job: 684c7edca65741789bd99d24e5f3543c
-Upload: backtest_protected_straddle (1).py
-Dispatch: standalone legacy.py adapter.
-Final API status: succeeded.
-Final log:
-  Validating and analysing 648 completed legs…
-  Worker elapsed: 1266.724s
-  Market-data cache: read_hits=0, read_misses=0, prepared_hits=0, prepared_misses=0
-  Cache retained: 0 memory bytes, 0 disk bytes
+| Parameter | Values |
+|---|---:|
+| Premium target | ₹200–₹400, step ₹25: 9 |
+| Leg stop-loss | 12%–40%, step 2%: 15 |
+| Combined maximum loss | ₹500–₹2,000, step ₹250: 7 |
+| Combined target | ₹1,000–₹5,000, step ₹500: 9 |
+| Leg-SL re-entries | 0–4: 5 |
+| Combined-SL re-entries | 0–4: 5 |
+| Combined-target re-entries | 0–4: 5 |
+| Entry time | 09:30–11:00, step 5 minutes: 19 |
 
-Total worker duration: 21 minutes 7 seconds. One active backtest was observed;
-~5 GB RAM was available. No evidence established memory exhaustion or competing
-backtest workers.
-Uploaded SHA256:
-79AB3C60CC589C86F3118F8605BA7F69767B109452DD818D1E8C5431F3D59BEA
+Expected Cartesian count:
 
-Retained previous-day uploads inspected were differently hashed
-nifty_6DTE_weekly_hard_sl_tp_two_reentries.py files. This cannot establish whether
-the user ran the exact standalone file elsewhere yesterday.
+```text
+9 × 15 × 7 × 9 × 5 × 5 × 5 × 19 = 20,199,375 combinations
+```
 
-Code concerns:
-- _price_at filters the day's full DataFrame for every timestamp/strike/type.
-  Every MTM check calls it for each leg.
-- run() repeatedly filters the entire chain by date.
-- Adapter uses its own DuckDB/Pandas loader; no shared-loader calls.
-- No phase timings separate loading, engine execution and analytics. Profile
-  before attributing exact runtime or claiming a regression cause.
+The sweep must stream batches to storage. Do not collect all combinations in
+driver memory.
 
-## Pending ETA UI change
+Some older sweep assumptions include lot size 20, exit at the first bar at or
+after 15:15, fixed 1% entry/exit slippage, and zero fees. These are not enough
+to establish AlgoTest parity; confirm them before using the results.
 
-static/runner.js shows 'estimating time remaining after the first combination'
-when ETA is null, rather than blank. After completion of a combination, the
-existing backend average-runtime estimate appears. No first-combination progress
-is measured by this change.
-Checked with node --check, git diff --check, and HTTP GET /runner.js while the
-server ran. Local and uncommitted. Potential follow-up: suppress estimating text
-for cancelled/terminal jobs. Pushing requires the unanswered explicit permission.
+## 7. Result schema
 
-## Next actions
+Common strategy parameters:
 
-1. Confirm actual uploaded source, dataset, config and status before diagnosis.
-2. Profile the relevant execution path with bounded phase timings; avoid another
-   unbounded full-data run just to obtain basic timing evidence.
-3. For authorized execution-only fixes, investigate indexed quote access and
-   reuse of immutable preparation. Include all relevant inputs in cache keys;
-   never share portfolio/simulation state between combinations.
-4. Compare raw trades, times, fills and snapshots on representative data before
-   measuring gains. Preserve duplicate/missing-quote behavior in optimized lookups.
-5. Address the premium script's correctness issues explicitly, separately from
-   performance changes. Never silently alter trading rules.
+```text
+premium_price
+leg_sl_pct
+combined_max_loss_rs
+combined_target_rs
+leg_sl_reentries
+combined_max_loss_reentries
+combined_target_reentries
+entry_start
+combination_index
+```
 
-Caching alone cannot explain/fix an expensive first combination. Do not repeat
-unsupported ETAs or assume the user's claim of identical scripts is disproven
-by the limited retained uploads.
+Older files may not contain `leg_sl_reentries`; do not invent it when it was
+not part of the executed sweep.
 
-## Validation reference
+Core metrics:
 
-An earlier session recorded 72 passing tests in 18.776 seconds. Tests were not
-rerun for this documentation-only handoff. For code changes run appropriate tests:
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```text
+status
+completed_trade_count
+net_pnl
+overall_roi_pct
+max_drawdown
+mtm_drawdown
+max_loss
+max_consecutive_losses
+win_rate
+```
 
-Read README.md, legacy.py, market_data.py, worker.py, runner.py and the actual
-uploaded script before continuing. Preserve unrelated files; do not reset/clean.
+If `net_pnl` is missing, the sorter can use `pnl`, `total_pnl`, `net_profit`,
+`total_net_pnl`, or `gross_pnl`. If no alias exists, it derives total P&L from
+the available yearly P&L columns.
+
+If `max_drawdown` is missing and `mtm_drawdown` exists, the sorter uses
+`mtm_drawdown`. Otherwise it derives a worst drawdown from yearly
+`mtm_dd_YYYY` fields.
+
+Year-on-year fields must contain values, not only headers:
+
+```text
+pnl_2024, pnl_2025, pnl_2026
+roi_2024_pct, roi_2025_pct, roi_2026_pct
+mtm_dd_2024, mtm_dd_2025, mtm_dd_2026
+```
+
+The scripts detect years dynamically. A file containing only `pnl_2026` and
+`mtm_dd_2026` is supported, but missing years cannot be reconstructed by the
+sorter.
+
+## 8. Main sorter
+
+Run in Kaggle:
+
+```python
+!pip install -q duckdb
+%run /kaggle/working/sensex_yearly_selection_sorter.py
+```
+
+Current default input:
+
+```text
+/kaggle/input/datasets/joyal126457/23123as
+```
+
+Default outputs:
+
+```text
+/kaggle/working/sensex_8lac_ranked.parquet
+/kaggle/working/sensex_8lac_top100.csv
+/kaggle/working/sensex_8lac_structured_top20.csv
+/kaggle/working/sensex_8lac_sort.duckdb
+```
+
+The sorter searches recursively for Parquet and prefers filenames containing
+`yearly`. If multiple files exist, verify the printed selected path. Use a
+direct file path when there is ambiguity.
+
+## 9. Hard filters and entry-time robustness
+
+The main sorter requires:
+
+- `status = 'succeeded'`;
+- at least one completed trade;
+- positive `net_pnl`;
+- non-null win rate, drawdown, maximum loss, and consecutive-loss fields;
+- a complete earlier or later entry-time side;
+- every one of the five variants on that side to retain at least 70% of the
+  candidate P&L.
+
+The default ROI basis is ₹300,000 and the default minimum ROI is 15%.
+
+For each candidate, record its total P&L as `P`. The earlier side tests
+`entry_start - 5`, `-10`, `-15`, `-20`, and `-25` minutes. The later side tests
+`entry_start + 5`, `+10`, `+15`, `+20`, and `+25` minutes. All non-time
+parameters remain identical. For either side to pass:
+
+```text
+required nearby P&L = net_pnl × 0.70
+```
+
+Every one of the five side-specific P&L values must individually meet the
+threshold. Do not average the five results. The candidate is removed only when
+neither complete side passes.
+Entry-time stability is a hard filter only. It is not a score and does not
+receive ranking weight.
+
+The output label means:
+
+- `both_sides` — prior and after windows pass;
+- `prior_side` — only the prior window passes;
+- `after_side` — only the after window passes;
+- `neither_side` — neither passes.
+
+`entry_robust_side` is descriptive. A row can show `both_sides` and still have
+`passes_strict_screen = False` because that flag also checks ROI and yearly P&L
+positivity.
+
+## 10. Current ranking model
+
+After the hard eligibility filters, the main sorter calculates percentile-based
+components for:
+
+- recent-year P&L;
+- worst-year P&L;
+- total P&L;
+- bracket P&L ratio;
+- inverse drawdown;
+- inverse maximum loss;
+- inverse consecutive losses;
+- lower total re-entry burden.
+
+Risk score:
+
+```text
+risk_score = 60% drawdown score
+           + 24% maximum-loss score
+           + 16% consecutive-loss score
+```
+
+Current final score:
+
+```text
+final_score = 18% recent-year score
+            + 15% bracket robustness score
+            + 5% worst-year score
+            + 25% risk score
+            + 30% total P&L score
+            + 7% re-entry score
+```
+
+The displayed components total 100%. The effective weights are 15% drawdown,
+6% maximum loss, and 4% consecutive losses within the 25% risk score. The
+re-entry score rewards a lower sum of
+the available leg-SL, combined-SL, and combined-target re-entry counts. It is a
+ranking preference, not a hard rejection filter.
+
+Tie-break order:
+
+1. Higher final score.
+2. Higher worst-year P&L.
+3. Higher bracket P&L ratio.
+4. Lower drawdown risk.
+5. Lower maximum-loss risk.
+6. Higher total P&L.
+7. Lower generated combination index.
+
+## 11. Simpler selection variants
+
+Use `rank_by_pnl_only.py` when the requirement is explicitly “sort by P&L” and
+no composite score or robustness selection is wanted.
+
+Use `rank_best_pnl_with_risk_floor.py` when the requirement is:
+
+- rank by highest P&L;
+- reject drawdown above 2% of ₹300,000;
+- reject `leg_sl_pct` above 23%.
+
+The drawdown limit is:
+
+```text
+₹300,000 × 2% = ₹6,000
+```
+
+The 23% limit is 23% of the option entry premium because it filters the
+`leg_sl_pct` parameter. It is not 23% of account capital.
+
+## 12. Structuring output
+
+Run after the sorter has created its CSV:
+
+```python
+%run /kaggle/working/structure_sensex_output.py
+```
+
+Default paths:
+
+```text
+Input:  /kaggle/working/sensex_8lac_top100.csv
+Output: /kaggle/working/sensex_8lac_structured_top20.csv
+```
+
+The structurer detects and preserves populated yearly P&L/DD columns, derives
+`net_pnl` only when absent, derives recent/worst-year P&L when absent, preserves
+existing rank order, and prints/saves the top N rows.
+
+If yearly fields are `<NA>`, the wrong Parquet was selected or the source file
+never contained yearly values. The structurer cannot reconstruct missing
+historical values from a one-year file.
+
+## 13. Recommended Kaggle procedure
+
+1. Attach the intended dataset in Kaggle.
+2. Confirm the mounted path in the Input panel.
+3. Inspect the Parquet files and schema before sorting:
+
+   ```python
+   import pandas as pd
+   from pathlib import Path
+
+   root = Path('/kaggle/input/datasets/joyal126457/23123as')
+   files = list(root.rglob('*.parquet'))
+   print(files)
+   sample = pd.read_parquet(files[0])
+   print(sample.columns.tolist())
+   print(sample.shape)
+   ```
+
+4. Confirm `pnl_YYYY` and `mtm_dd_YYYY` columns contain values.
+5. Run the sorter and verify the printed input path and row counts.
+6. Inspect `net_pnl`, yearly P&L, yearly DD, the five earlier/later side
+   results, `entry_robust_side`, and
+   `passes_strict_screen`.
+7. Run the structurer only after sorter output exists.
+8. Review a shortlist using the ranked Parquet, not only the first display.
+9. Rerun shortlisted combinations using reconciled execution logic before
+   treating any one as the final strategy.
+
+Notebook-injected `-f kernel.json` arguments are ignored through
+`parse_known_args`. If code is pasted directly into a notebook cell, paste the
+complete function body; an incomplete `def` causes the earlier indentation and
+syntax errors.
+
+## 14. Common failures
+
+### Windows path not found in Kaggle
+
+Paths such as `D:/Backend/...` exist only on the local Windows machine. Kaggle
+must use its mounted path, for example:
+
+```text
+/kaggle/input/datasets/joyal126457/23123as
+```
+
+### Missing `max_drawdown`
+
+Some files use `mtm_drawdown`. The sorter supports that fallback. If neither
+exists, yearly `mtm_dd_YYYY` fields are required for derivation.
+
+### Missing yearly values
+
+The selected input is not the yearly Parquet, or the yearly enrichment stage
+did not run. Point the sorter to the correct file and verify the schema first.
+
+### Zero eligible rows
+
+Check `status`, completed trades, positive P&L, all five timestamps on a side,
+and the 70% per-variant P&L requirement.
+
+### `both_sides` but `passes_strict_screen = False`
+
+This is expected when entry-time robustness passes but ROI or yearly P&L fails.
+The two columns represent different checks.
+
+### P&L absent in structured output
+
+The clean field is `net_pnl`; yearly fields are `pnl_2024`, `pnl_2025`, and
+`pnl_2026` when available. Inspect the sorter CSV header and source schema
+instead of adding empty column names.
+
+## 15. AlgoTest parity work still required
+
+Before a production decision:
+
+1. Verify entry timestamp mapping against the AlgoTest candle convention.
+2. Load option OHLC high/low fields for leg stop-loss behavior.
+3. Implement exact individual-leg re-entry while the opposite leg remains open.
+4. Match same-candle re-entry timing.
+5. Produce cycle/day-level combined metrics as well as raw leg metrics.
+6. Match slippage, fees, lot size, expiry selection, ATM calculation, and
+   closest-premium tie-breaking.
+7. Compare one parameter combination day by day against an AlgoTest export.
+8. Run the broad reconciled sweep only after the single-combination comparison
+   agrees.
+
+Debug the first differing execution event. Do not tune ranking to compensate
+for an execution-model mismatch.
+
+## 16. Safe handoff checklist
+
+Before changing or rerunning this project:
+
+- Read `AGENTS.md` and the reconciliation document.
+- Identify the exact source Parquet and record its schema.
+- Record date coverage and common 0DTE dates.
+- Record the parameter grid and expected combination count.
+- State whether the result is screening or reconciled output.
+- Keep raw generation separate from ranking.
+- Confirm yearly P&L/DD values are populated before structuring.
+- Keep the 70% five-variant entry-time rule as a filter only.
+- Do not calculate or rank an entry-stability score.
+- Preserve `net_pnl` and yearly P&L values in the review CSV.
+- Keep deterministic tie-break ordering.
+- Rerun shortlisted combinations under reconciled execution rules.
+- Never call a provisional screening winner final without AlgoTest comparison.
+
+## 17. Next owner actions
+
+1. Inspect the current Kaggle input and verify whether it contains 2024, 2025,
+   and 2026 values.
+2. Run the P&L/risk-floor script to establish a transparent baseline.
+3. Run the full yearly sorter and inspect why high-P&L rows fail strict screen.
+4. Add a failure-reason field if row-level rejection explanations are needed.
+5. Select a shortlist instead of relying on one row.
+6. Rerun the shortlist with AlgoTest-matched execution and compare daily logs.
+7. Update this handoff with the final input filename, actual date coverage,
+   selected parameters, and validation evidence.

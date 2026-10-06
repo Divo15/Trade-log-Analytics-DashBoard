@@ -136,6 +136,7 @@ $("storageForm").addEventListener("submit", async event => {
 });
 
 function showRunner() {
+  window.hideResearch?.();
   $("runnerPanel").hidden = false;
   $("parquetPanel").hidden = true;
   $("uploadView").hidden = true;
@@ -224,9 +225,16 @@ function rankingColumnOptions() {
 
 function defaultRankingCriteria() {
   const mapping = schemaMapping();
+  if (mapping.pnl_2025 && mapping.pnl_2026) {
+    return [
+      {column: mapping.pnl_2025, weight: 30, direction: "higher"},
+      {column: mapping.pnl_2026, weight: 30, direction: "higher"},
+      {column: "__ranking_drawdown", weight: 40, direction: "lower"},
+    ];
+  }
+  const yearlyPnl = mapping.pnl_2025 || mapping.pnl_2026 || "";
   return [
-    {column: mapping.pnl_2025 || "", weight: 30, direction: "higher"},
-    {column: mapping.pnl_2026 || "", weight: 30, direction: "higher"},
+    {column: yearlyPnl, weight: 60, direction: "higher"},
     {column: "__ranking_drawdown", weight: 40, direction: "lower"},
   ];
 }
@@ -450,6 +458,9 @@ function validateSchemaMapping() {
   }
 
   const mapping = schemaMapping();
+  if (!mapping.pnl_2025 && !mapping.pnl_2026) {
+    errors.push(schemaIssue("missing_yearly_pnl", "yearly_pnl", "Map at least one yearly P&L column."));
+  }
   if (!mapping.mtm_drawdown && !(mapping.mtm_dd_2025 && mapping.mtm_dd_2026)) {
     errors.push(schemaIssue("missing_drawdown", "drawdown", "Map overall drawdown, or map both 2025 and 2026 drawdown."));
   }
@@ -546,8 +557,8 @@ async function inspectParquet() {
     $("parquetStatus").textContent = "Choose a nonempty .parquet file.";
     return;
   }
-  if (file.size > 256 * 1024 * 1024) {
-    $("parquetStatus").textContent = "This Parquet file is larger than the 256 MiB limit.";
+  if (file.size > 1.5 * 1024 * 1024 * 1024) {
+    $("parquetStatus").textContent = "This Parquet file is larger than the 1.5 GiB limit.";
     return;
   }
   $("inspectParquetButton").disabled = true;
@@ -606,11 +617,24 @@ function parameterColumnLabel(key) {
   return String(key).replace(/_/g, " ").replace(/\b\w/g, character => character.toUpperCase());
 }
 
+// Sweep generators do not all use the same cutoff column name.  Keep it in
+// the fixed result column rather than showing it twice as a strategy setting.
+const CUTOFF_PARAMETER_NAMES = ["cutoff_time", "cutoff", "cutoff_point", "cutoff_start"];
+
+function cutoffValue(row) {
+  if (row.cutoff_time !== undefined && row.cutoff_time !== null && row.cutoff_time !== "") {
+    return row.cutoff_time;
+  }
+  const parameters = row.parameters || {};
+  return CUTOFF_PARAMETER_NAMES.map(name => parameters[name])
+    .find(value => value !== undefined && value !== null && value !== "") ?? "—";
+}
+
 function rankedParameterColumns(rows) {
   const columns = [];
   const seen = new Set();
   rows.forEach(row => Object.keys(row.parameters || {}).forEach(key => {
-    if (!seen.has(key)) { seen.add(key); columns.push(key); }
+    if (!CUTOFF_PARAMETER_NAMES.includes(key) && !seen.has(key)) { seen.add(key); columns.push(key); }
   }));
   return columns;
 }
@@ -620,7 +644,7 @@ function renderRankedSweepHeader(parameterColumns) {
   const fixedHeaders = [
     ["Rank", ""], ["Final score", "numeric"], ["Net P&L", "numeric"],
     ["2025 P&L", "numeric"], ["2026 P&L", "numeric"], ["Drawdown", "numeric"],
-    ["Robustness", ""], ["Entry", ""],
+    ["Robustness", ""], ["Entry", ""], ["Cutoff", ""],
   ];
   fixedHeaders.forEach(([label, className]) => {
     const cell = document.createElement("th");
@@ -675,9 +699,17 @@ function showStrategyDetail(row, trigger) {
     return element;
   });
   $("strategyComponentsRows").replaceChildren(...componentRows);
-  const parameterEntries = Object.entries(row.parameters || {});
-  const parameterNodes = parameterEntries.length
-    ? parameterEntries.flatMap(([key, value]) => {
+  // Always show these two timing settings prominently. Cutoff remains visible
+  // even if an older response did not retain it in `parameters`.
+  const parameterEntries = Object.entries(row.parameters || {})
+    .filter(([key]) => !CUTOFF_PARAMETER_NAMES.includes(key));
+  const detailEntries = [
+    ["entry_start", row.entry_start],
+    ["cutoff_time", cutoffValue(row)],
+    ...parameterEntries,
+  ];
+  const parameterNodes = detailEntries.length
+    ? detailEntries.flatMap(([key, value]) => {
       const term = document.createElement("dt");
       term.textContent = key;
       const definition = document.createElement("dd");
@@ -688,12 +720,16 @@ function showStrategyDetail(row, trigger) {
   $("strategyParameters").replaceChildren(...parameterNodes);
   $("strategyDetail").hidden = false;
   trigger?.setAttribute("aria-expanded", "true");
+  if (trigger) trigger.textContent = "Close combination";
   $("strategyDetailTitle").focus({preventScroll:true});
 }
 
 function closeStrategyDetail() {
   $("strategyDetail").hidden = true;
-  document.querySelectorAll("[data-strategy-detail-button]").forEach(button => button.setAttribute("aria-expanded", "false"));
+  document.querySelectorAll("[data-strategy-detail-button]").forEach(button => {
+    button.setAttribute("aria-expanded", "false");
+    button.textContent = "Details";
+  });
 }
 
 function chartScale(values, lowerBound = 0) {
@@ -867,6 +903,7 @@ function renderRankedSweep(payload) {
       money.format(row.ranking_drawdown),
       robustnessLabel(row.entry_robustness, row.before_variant_count, row.after_variant_count),
       row.entry_start,
+      cutoffValue(row),
     ];
     values.forEach((value, index) => {
       const cell = document.createElement("td");
@@ -897,7 +934,9 @@ function renderRankedSweep(payload) {
     detailButton.textContent = "Details";
     detailButton.setAttribute("aria-expanded", "false");
     detailButton.addEventListener("click", () => {
-      document.querySelectorAll("[data-strategy-detail-button]").forEach(button => button.setAttribute("aria-expanded", "false"));
+      const wasOpen = detailButton.getAttribute("aria-expanded") === "true";
+      closeStrategyDetail();
+      if (wasOpen) return;
       showStrategyDetail(row, detailButton);
     });
     detailCell.append(detailButton);
@@ -907,7 +946,7 @@ function renderRankedSweep(payload) {
   if (!rows.length) {
     const empty = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 9 + parameterColumns.length;
+    cell.colSpan = 10 + parameterColumns.length;
     cell.className = "empty-table";
     cell.textContent = zeroEligibleReason(payload);
     empty.append(cell);
@@ -1242,6 +1281,7 @@ async function openSweepIteration(index, button) {
 }
 
 function renderSweep(sweep, id, {partial = false} = {}) {
+  window.hideResearch?.();
   sweepRun = id;
   $("sweepSaveStatus").textContent = "";
   selectedSweepIndex = null;

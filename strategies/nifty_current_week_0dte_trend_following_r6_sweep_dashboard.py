@@ -66,6 +66,10 @@ import pandas as pd
 
 STRATEGY_CONTRACT_VERSION = "2"
 RUN_MODE = "sweep"
+BATCH_ACCELERATOR = "strategies.nifty_current_week_0dte_trend_following_r6_numba_batch"
+BATCH_CHUNK_SIZE = 25_000
+BATCH_WORKERS = None
+BATCH_DISPLAY_LIMIT = 100
 
 STRIKE_PREMIUM_PCTS = (0.25, 0.30, 0.35)
 ADD_ON_DECAY_PCTS = (0.075, 0.10, 0.125)
