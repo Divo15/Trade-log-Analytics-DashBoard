@@ -834,6 +834,35 @@ function robustnessLabel(value, beforeCount = 0, afterCount = 0) {
   return `${label} · ${value === "before" ? beforeCount : afterCount}`;
 }
 
+const rankedSavedCombinationKeys = new Set();
+
+function rankedCombinationKey(row) {
+  return `${rankedSweepPayload?.run_summary?.input_file || "sweep.parquet"}|${row.rank}|${JSON.stringify(row.parameters || {})}`;
+}
+
+async function saveRankedCombination(row, button) {
+  if (!rankedSweepPayload?.run_summary || button.disabled) return;
+  const key = rankedCombinationKey(row);
+  button.disabled = true;
+  button.textContent = "Saving…";
+  try {
+    const response = await fetch("/api/sweep-save", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "X-Local-Runner": "1"},
+      body: JSON.stringify({row, run_summary: rankedSweepPayload.run_summary}),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Could not save this combination.");
+    rankedSavedCombinationKeys.add(key);
+    button.textContent = "Saved";
+    $("filterPreviewStatus").textContent = `Ranked combination ${row.rank} was saved to dashboard history.`;
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = "Save combination";
+    $("filterPreviewStatus").textContent = error.message;
+  }
+}
+
 function formatDetailNumber(value) {
   return Number.isFinite(Number(value))
     ? new Intl.NumberFormat("en-IN", {maximumFractionDigits: 4}).format(value)
@@ -954,9 +983,45 @@ function renderSweepDistribution(distribution) {
 }
 
 function renderSweepCharts(payload) {
+  renderRejectionReport(payload);
   renderSweepScatter(payload.rows || []);
   renderSweepYearlyChart(payload.rows || []);
   renderSweepDistribution(payload.robustness_distribution || {});
+}
+
+function renderRejectionReport(payload) {
+  let panel = $("sweepRejectionReport");
+  if (!panel) {
+    panel = document.createElement("details");
+    panel.id = "sweepRejectionReport";
+    panel.className = "sweep-note";
+    $("rankedSweepSummary").after(panel);
+  }
+  const report = payload.rejection_report;
+  panel.hidden = !report;
+  if (!report) return;
+  const stages = [...report.stages];
+  const robustness = report.robustness;
+  const removed = report.source_count - report.base_rows + robustness.removed_count;
+  panel.open = payload.eligible_count === 0;
+  panel.innerHTML = `<summary>Filter rejection breakdown · ${number.format(removed)} removed</summary>
+    <p>Filters are applied in order. Each row is counted at its first failed filter.
+    Missing values fail active checks. Examples show one rejected row per filter.</p>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Filter rejection counts">
+    <table><thead><tr><th>Filter / requirement</th><th>Input</th><th>Removed</th><th>Remaining</th><th>Example and reason</th></tr></thead>
+    <tbody></tbody></table></div>
+    <p>${number.format(report.grouped_rows)} duplicate input rows combined during grouping.
+    ${number.format(report.eligible_count)} eligible combinations; ${number.format(payload.rows?.length || 0)} displayed.
+    The display limit does not reject combinations.</p>`;
+  stages.push({...robustness, requirement: robustness.status === "enforced" ? "Entry-time robustness: required"
+    : robustness.status === "skipped_no_variants" ? "Entry-time robustness: skipped because no variants exist; rows remain unconfirmed"
+    : "Entry-time robustness: not required (no rows removed)"});
+  panel.querySelector("tbody").innerHTML = stages.map(stage => {
+    const evidence = (stage.examples || []).map(example => `<details><summary>View rejected example</summary><p>${escapeHtml(example.reason)}</p>
+      <dl>${Object.entries(example.values).map(([key, value]) => `<dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value == null ? "Missing" : String(value))}</dd>`).join("")}</dl></details>`).join("");
+    return `<tr><td>${escapeHtml(stage.requirement)}</td><td class="numeric">${number.format(stage.input_count)}</td>
+      <td class="numeric">${number.format(stage.removed_count)}</td><td class="numeric">${number.format(stage.remaining_count)}</td><td>${evidence || "—"}</td></tr>`;
+  }).join("");
 }
 
 function zeroEligibleReason(payload) {
@@ -1102,6 +1167,13 @@ function renderRankedSweep(payload) {
       showStrategyDetail(row, detailButton);
     });
     detailCell.append(detailButton);
+    const saveButton = document.createElement("button");
+    saveButton.type = "button";
+    saveButton.className = "secondary-button";
+    saveButton.textContent = rankedSavedCombinationKeys.has(rankedCombinationKey(row)) ? "Saved" : "Save combination";
+    saveButton.disabled = rankedSavedCombinationKeys.has(rankedCombinationKey(row));
+    saveButton.addEventListener("click", () => saveRankedCombination(row, saveButton));
+    detailCell.append(saveButton);
     element.append(detailCell);
     return element;
   });
@@ -1379,8 +1451,8 @@ async function showHistory() {
       const metrics = record.metrics || {};
       const drawdown = metrics.intraday_drawdown == null ? metrics.max_drawdown : metrics.intraday_drawdown;
       const dataset = record.dataset?.label || "Custom data";
-      const action = record.kind === "combination"
-        ? "Parameters saved"
+      const action = record.kind === "combination" || record.kind === "ranked_combination"
+        ? record.kind === "ranked_combination" ? "Ranked combination saved" : "Parameters saved"
         : `<button class="secondary-button history-open" data-history-id="${record.id}" type="button">View analytics</button>`;
       return `<tr><td>${historyDate.format(new Date(record.created_at))}</td><td>${escapeHtml(record.strategy || "Strategy")}</td><td>${escapeHtml(dataset)}</td><td class="sweep-parameters">${escapeHtml(parameterText(record.parameters))}</td><td class="numeric">${record.selection_score == null ? "—" : number.format(record.selection_score)}</td><td class="numeric ${Number(metrics.net_pnl) > 0 ? "positive" : ""}">${money.format(metrics.net_pnl)}</td>${savedYearlyPnlCell(record, 2025)}${savedYearlyPnlCell(record, 2026)}<td class="numeric ${Number(drawdown) < 0 ? "negative" : ""}">${money.format(drawdown)}</td><td>${action}</td></tr>`;
     }).join("") || '<tr><td colspan="10" class="empty-table">Run a sweep and save any completed combination here.</td></tr>';

@@ -9,6 +9,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 import json
 import logging
+import re
+from uuid import uuid4
 from pathlib import Path
 import tempfile
 import threading
@@ -39,6 +41,22 @@ MAX_BACKTEST_BYTES = 256 * 1024 * 1024
 MAX_SWEEP_PARQUET_BYTES = int(1.5 * 1024 * 1024 * 1024)
 MAX_SWEEP_EXPORT_BYTES = 5 * 1024 * 1024
 LOGGER = logging.getLogger("trade_log_dashboard.server")
+
+
+_STRATEGY_SOURCE_COLUMNS = {
+    "strategy", "strategyname", "strategyid", "strategytype",
+    "algorithm", "algorithmname", "model", "modelname",
+    "system", "systemname", "variant", "variantname",
+}
+
+
+def _strategy_source(parameters: dict[str, Any], source_file: str) -> dict[str, Any]:
+    """Identify the Parquet column that names the originating strategy, when present."""
+    for column, value in parameters.items():
+        normalised = re.sub(r"[^a-z0-9]", "", str(column).lower())
+        if normalised in _STRATEGY_SOURCE_COLUMNS and value is not None and str(value).strip():
+            return {"column": str(column), "value": value}
+    return {"column": "input_file", "value": source_file}
 
 
 class DashboardServer(ThreadingHTTPServer):
@@ -75,6 +93,78 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _ranked_history_path(self) -> Path:
+        return self.server.storage.results_root / "ranked-combinations.json"
+
+    def _ranked_history(self) -> list[dict[str, Any]]:
+        path = self._ranked_history_path()
+        if not path.is_file():
+            return []
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return []
+        return payload if isinstance(payload, list) else []
+
+    def _all_history(self) -> list[dict[str, Any]]:
+        records = self.server.runner.history() + self._ranked_history()
+        return sorted(records, key=lambda item: item.get("created_at", ""), reverse=True)
+
+    def _save_ranked_combination(self) -> None:
+        if not self._local_request():
+            return
+        if self.headers.get("X-Local-Runner") != "1":
+            self._json(HTTPStatus.FORBIDDEN, {"error": "Save combinations from this local dashboard."})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length <= 0 or length > 2 * 1024 * 1024:
+                raise ValueError("The ranked combination payload is empty or too large.")
+            payload = json.loads(self.rfile.read(length))
+            row = payload.get("row") if isinstance(payload, dict) else None
+            summary = payload.get("run_summary") if isinstance(payload, dict) else None
+            if not isinstance(row, dict) or not isinstance(summary, dict):
+                raise ValueError("A ranked combination and run summary are required.")
+            parameters = row.get("parameters")
+            if not isinstance(parameters, dict):
+                raise ValueError("The ranked combination has no strategy parameters.")
+            source_file = Path(str(summary.get("input_file", "sweep.parquet"))).name
+            strategy_source = _strategy_source(parameters, source_file)
+            record = {
+                "id": f"ranked-{uuid4().hex}",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "strategy": f"Ranked combination · {source_file}",
+                "dataset": {"label": source_file},
+                "strategy_source": strategy_source,
+                "parameters": parameters,
+                "rank": row.get("rank"),
+                "selection_score": row.get("final_score"),
+                "metrics": {
+                    "net_pnl": row.get("net_pnl"),
+                    "pnl_2025": row.get("pnl_2025"),
+                    "pnl_2026": row.get("pnl_2026"),
+                    "max_drawdown": row.get("ranking_drawdown"),
+                    "drawdown_2025": row.get("drawdown_2025"),
+                    "drawdown_2026": row.get("drawdown_2026"),
+                    "entry_robustness": row.get("entry_robustness"),
+                },
+                "ranked_result": row,
+                "run_summary": summary,
+                "artifacts": [],
+                "kind": "ranked_combination",
+            }
+            with self.server.runner.lock:
+                records = self._ranked_history()
+                records.insert(0, record)
+                path = self._ranked_history_path()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+                temporary.write_text(json.dumps(records, allow_nan=False), encoding="utf-8")
+                temporary.replace(path)
+            self._json(HTTPStatus.OK, record)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+
     def do_GET(self) -> None:  # noqa: N802
         request_path = urlsplit(self.path).path
         if request_path.startswith("/api/research"):
@@ -97,7 +187,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             parts = request_path.strip("/").split("/")
             try:
                 if len(parts) == 2:
-                    self._json(HTTPStatus.OK, {"history": self.server.runner.history()})
+                    self._json(HTTPStatus.OK, {"history": self._all_history()})
                 elif len(parts) == 3:
                     self._json(HTTPStatus.OK, self.server.runner.history_item(parts[2]))
                 elif len(parts) == 4:
@@ -175,6 +265,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self) -> None:  # noqa: N802
+        if self.path == "/api/sweep-save":
+            self._save_ranked_combination()
+            return
         if self.path.startswith("/api/research"):
             self._research_post()
             return

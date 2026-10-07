@@ -12,6 +12,7 @@ import tempfile
 from typing import Any
 
 import duckdb
+from .rejection_report import build_rejection_report
 
 
 FIELD_DEFINITIONS: tuple[dict[str, Any], ...] = (
@@ -876,6 +877,10 @@ def rank_sweep_parquet(
         cursor = connection.execute(query, values)
         headers = [item[0] for item in cursor.description]
         rows = [dict(zip(headers, row)) for row in cursor.fetchall()]
+        rejection_report = build_rejection_report(
+            connection, path, base_clauses, values, entry_expression,
+            drawdown_expression, query, require_robustness,
+        )
         diagnostics: dict[str, Any] = {}
         if not rows:
             diagnostic_query = f"""
@@ -988,6 +993,7 @@ def rank_sweep_parquet(
         result_rows.append({**row, "parameters": parameters, "ranking_components": components})
     return {
         "source_row_count": report["file"]["row_count"],
+        "rejection_report": rejection_report,
         "eligible_count": int(rows[0]["eligible_count"]) if rows else 0,
         "top_n": top_n,
         "ranking": [{key: item[key] for key in ("column", "label", "weight", "direction")} for item in criteria],
