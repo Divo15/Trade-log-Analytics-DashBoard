@@ -1382,12 +1382,12 @@ async function showHistory() {
       const action = record.kind === "combination"
         ? "Parameters saved"
         : `<button class="secondary-button history-open" data-history-id="${record.id}" type="button">View analytics</button>`;
-      return `<tr><td>${historyDate.format(new Date(record.created_at))}</td><td>${escapeHtml(record.strategy || "Strategy")}</td><td>${escapeHtml(dataset)}</td><td class="sweep-parameters">${escapeHtml(parameterText(record.parameters))}</td><td class="numeric">${record.selection_score == null ? "—" : number.format(record.selection_score)}</td><td class="numeric ${Number(metrics.net_pnl) > 0 ? "positive" : ""}">${money.format(metrics.net_pnl)}</td><td class="numeric ${Number(drawdown) < 0 ? "negative" : ""}">${money.format(drawdown)}</td><td>${action}</td></tr>`;
-    }).join("") || '<tr><td colspan="8" class="empty-table">Run a sweep and save any completed combination here.</td></tr>';
+      return `<tr><td>${historyDate.format(new Date(record.created_at))}</td><td>${escapeHtml(record.strategy || "Strategy")}</td><td>${escapeHtml(dataset)}</td><td class="sweep-parameters">${escapeHtml(parameterText(record.parameters))}</td><td class="numeric">${record.selection_score == null ? "—" : number.format(record.selection_score)}</td><td class="numeric ${Number(metrics.net_pnl) > 0 ? "positive" : ""}">${money.format(metrics.net_pnl)}</td>${savedYearlyPnlCell(record, 2025)}${savedYearlyPnlCell(record, 2026)}<td class="numeric ${Number(drawdown) < 0 ? "negative" : ""}">${money.format(drawdown)}</td><td>${action}</td></tr>`;
+    }).join("") || '<tr><td colspan="10" class="empty-table">Run a sweep and save any completed combination here.</td></tr>';
     $("historyRows").querySelectorAll(".history-open").forEach(button => button.addEventListener("click", () => openHistory(button.dataset.historyId, button)));
   } catch (error) {
     $("historyStatus").textContent = error.message;
-    $("historyRows").innerHTML = '<tr><td colspan="8" class="empty-table">History is unavailable.</td></tr>';
+    $("historyRows").innerHTML = '<tr><td colspan="10" class="empty-table">History is unavailable.</td></tr>';
   }
   $("historyTitle").focus({preventScroll:true});
   window.scrollTo({top:0, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth"});
@@ -1397,6 +1397,21 @@ $("historyButton").addEventListener("click", showHistory);
 function parameterText(parameters) {
   const entries = Object.entries(parameters || {});
   return entries.length ? entries.map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(" · ") : "Strategy defaults";
+}
+
+function savedYearlyPnl(record, year) {
+  const metrics = record.metrics || {};
+  const direct = metrics[`pnl_${year}`] ?? record.ranked_result?.[`pnl_${year}`];
+  if (direct != null && direct !== "" && Number.isFinite(Number(direct))) return Number(direct);
+  const yearly = metrics.yearly_net_pnl || {};
+  const value = yearly[year] ?? yearly[String(year)];
+  return value == null || value === "" || !Number.isFinite(Number(value)) ? null : Number(value);
+}
+
+function savedYearlyPnlCell(record, year) {
+  const value = savedYearlyPnl(record, year);
+  const className = value > 0 ? "positive" : value < 0 ? "negative" : "";
+  return `<td class="numeric ${className}">${value == null ? "—" : money.format(value)}</td>`;
 }
 
 async function saveSweepCombination(index, button) {
