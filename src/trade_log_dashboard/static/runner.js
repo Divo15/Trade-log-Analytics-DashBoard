@@ -742,7 +742,7 @@ function renderRankedSweepHeader(parameterColumns) {
   const headerRow = document.createElement("tr");
   const fixedHeaders = [
     ["Rank", ""], ["Final score", "numeric"], ["Net P&L", "numeric"],
-    ["2025 P&L", "numeric"], ["2026 P&L", "numeric"], ["Drawdown", "numeric"],
+    ["2025 P&L", "numeric"], ["2026 P&L", "numeric"], ["2025 DD", "numeric"], ["2026 DD", "numeric"], ["Drawdown", "numeric"],
     ["Robustness", ""], ["Entry", ""], ["Cutoff", ""],
   ];
   fixedHeaders.forEach(([label, className]) => {
@@ -1127,6 +1127,8 @@ function renderRankedSweep(payload) {
       money.format(row.net_pnl),
       money.format(row.pnl_2025),
       money.format(row.pnl_2026),
+      formatYearlyDrawdown(row.drawdown_2025),
+      formatYearlyDrawdown(row.drawdown_2026),
       money.format(row.ranking_drawdown),
       robustnessLabel(row.entry_robustness, row.before_variant_count, row.after_variant_count),
       row.entry_start,
@@ -1135,8 +1137,8 @@ function renderRankedSweep(payload) {
     values.forEach((value, index) => {
       const cell = document.createElement("td");
       cell.textContent = value;
-      if ([1, 2, 3, 4, 5].includes(index)) cell.className = "numeric";
-      if (index === 6) {
+      if ([1, 2, 3, 4, 5, 6, 7].includes(index)) cell.className = "numeric";
+      if (index === 8) {
         cell.className = "robustness-cell";
         const badge = document.createElement("span");
         badge.className = `robustness-badge robustness-${row.entry_robustness}`;
@@ -1180,7 +1182,7 @@ function renderRankedSweep(payload) {
   if (!rows.length) {
     const empty = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 10 + parameterColumns.length;
+    cell.colSpan = 12 + parameterColumns.length;
     cell.className = "empty-table";
     cell.textContent = zeroEligibleReason(payload);
     empty.append(cell);
@@ -1439,6 +1441,17 @@ async function showHistory() {
   $("backToSweepButton").hidden = true;
   hideStorage();
   $("historyPanel").hidden = false;
+  const historyHeader = $("historyPanel").querySelector("thead tr");
+  if (!historyHeader.querySelector("[data-yearly-dd]")) {
+    const before = historyHeader.children[historyHeader.children.length - 2];
+    for (const year of [2025, 2026]) {
+      const cell = document.createElement("th");
+      cell.className = "numeric";
+      cell.dataset.yearlyDd = String(year);
+      cell.textContent = `${year} DD`;
+      historyHeader.insertBefore(cell, before);
+    }
+  }
   $("historyStatus").textContent = "Loading saved results…";
   try {
     const response = await fetch("/api/history");
@@ -1454,12 +1467,12 @@ async function showHistory() {
       const action = record.kind === "combination" || record.kind === "ranked_combination"
         ? record.kind === "ranked_combination" ? "Ranked combination saved" : "Parameters saved"
         : `<button class="secondary-button history-open" data-history-id="${record.id}" type="button">View analytics</button>`;
-      return `<tr><td>${historyDate.format(new Date(record.created_at))}</td><td>${escapeHtml(record.strategy || "Strategy")}</td><td>${escapeHtml(dataset)}</td><td class="sweep-parameters">${escapeHtml(parameterText(record.parameters))}</td><td class="numeric">${record.selection_score == null ? "—" : number.format(record.selection_score)}</td><td class="numeric ${Number(metrics.net_pnl) > 0 ? "positive" : ""}">${money.format(metrics.net_pnl)}</td>${savedYearlyPnlCell(record, 2025)}${savedYearlyPnlCell(record, 2026)}<td class="numeric ${Number(drawdown) < 0 ? "negative" : ""}">${money.format(drawdown)}</td><td>${action}</td></tr>`;
-    }).join("") || '<tr><td colspan="10" class="empty-table">Run a sweep and save any completed combination here.</td></tr>';
+      return `<tr><td>${historyDate.format(new Date(record.created_at))}</td><td>${escapeHtml(record.strategy || "Strategy")}</td><td>${escapeHtml(dataset)}</td><td class="sweep-parameters">${escapeHtml(parameterText(record.parameters))}</td><td class="numeric">${record.selection_score == null ? "—" : number.format(record.selection_score)}</td><td class="numeric ${Number(metrics.net_pnl) > 0 ? "positive" : ""}">${money.format(metrics.net_pnl)}</td>${savedYearlyPnlCell(record, 2025)}${savedYearlyPnlCell(record, 2026)}${savedYearlyDrawdownCell(record, 2025)}${savedYearlyDrawdownCell(record, 2026)}<td class="numeric ${Number(drawdown) < 0 ? "negative" : ""}">${money.format(drawdown)}</td><td>${action}</td></tr>`;
+    }).join("") || '<tr><td colspan="12" class="empty-table">Run a sweep and save any completed combination here.</td></tr>';
     $("historyRows").querySelectorAll(".history-open").forEach(button => button.addEventListener("click", () => openHistory(button.dataset.historyId, button)));
   } catch (error) {
     $("historyStatus").textContent = error.message;
-    $("historyRows").innerHTML = '<tr><td colspan="10" class="empty-table">History is unavailable.</td></tr>';
+    $("historyRows").innerHTML = '<tr><td colspan="12" class="empty-table">History is unavailable.</td></tr>';
   }
   $("historyTitle").focus({preventScroll:true});
   window.scrollTo({top:0, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth"});
@@ -1469,6 +1482,20 @@ $("historyButton").addEventListener("click", showHistory);
 function parameterText(parameters) {
   const entries = Object.entries(parameters || {});
   return entries.length ? entries.map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(" · ") : "Strategy defaults";
+}
+
+function formatYearlyDrawdown(value) {
+  return value == null || value === "" || !Number.isFinite(Number(value))
+    ? "—" : money.format(Math.abs(Number(value)));
+}
+
+function savedYearlyDrawdownCell(record, year) {
+  const metrics = record.metrics || {};
+  const row = record.ranked_result || {};
+  const mapped = record.run_summary?.column_mapping?.[`mtm_dd_${year}`];
+  const value = metrics[`drawdown_${year}`] ?? row[`drawdown_${year}`]
+    ?? metrics[`mtm_dd_${year}`] ?? (mapped ? record.parameters?.[mapped] : null);
+  return `<td class="numeric">${formatYearlyDrawdown(value)}</td>`;
 }
 
 function savedYearlyPnl(record, year) {

@@ -141,6 +141,7 @@ def _export_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "rank": source.get("rank"), "final_score": source.get("final_score"),
             "net_pnl": source.get("net_pnl"), "pnl_2025": source.get("pnl_2025"),
             "pnl_2026": source.get("pnl_2026"), "ranking_drawdown": source.get("ranking_drawdown"),
+            "drawdown_2025": source.get("drawdown_2025"), "drawdown_2026": source.get("drawdown_2026"),
             "entry_start": source.get("entry_start"), "entry_robustness": source.get("entry_robustness"),
         }
         parameters = source.get("parameters") or {}
@@ -807,6 +808,8 @@ def rank_sweep_parquet(
                  max(CAST({identifier(net_pnl)} AS DOUBLE)) AS net_pnl,
                  {f'any_value(CAST({identifier(pnl_2025)} AS DOUBLE))' if pnl_2025 else 'NULL::DOUBLE'} AS pnl_2025,
                  {f'any_value(CAST({identifier(pnl_2026)} AS DOUBLE))' if pnl_2026 else 'NULL::DOUBLE'} AS pnl_2026,
+                 {f'any_value(abs(CAST({identifier(dd_2025)} AS DOUBLE)))' if dd_2025 else 'NULL::DOUBLE'} AS drawdown_2025,
+                 {f'any_value(abs(CAST({identifier(dd_2026)} AS DOUBLE)))' if dd_2026 else 'NULL::DOUBLE'} AS drawdown_2026,
                  any_value(ranking_drawdown) AS ranking_drawdown,
                  {parameter_select}{custom_metric_sql}
             FROM source
@@ -867,7 +870,7 @@ def rank_sweep_parquet(
         )
         SELECT row_number() OVER (ORDER BY final_score DESC, net_pnl DESC, ranking_drawdown ASC,
                                   parameter_key ASC, entry_minutes ASC) AS rank,
-               final_score, net_pnl, pnl_2025, pnl_2026, ranking_drawdown, entry_start, entry_robustness, before_variant_count, after_variant_count,
+               final_score, net_pnl, pnl_2025, pnl_2026, drawdown_2025, drawdown_2026, ranking_drawdown, entry_start, entry_robustness, before_variant_count, after_variant_count,
                eligible_count, before_count, after_count, both_count, not_confirmed_count, {component_select}, {output_parameters}
           FROM top_rows CROSS JOIN distribution
          ORDER BY rank
