@@ -143,11 +143,6 @@
             <label for="filterLatestEntry">Latest entry time<input id="filterLatestEntry" type="time" value="10:00"></label>
             <label for="filterMinimumTrades">Minimum completed trades<input id="filterMinimumTrades" type="number" min="0" step="1" placeholder="Not mapped"></label>
           </div>
-          <section class="parameter-filters" aria-labelledby="parameterFilterTitle">
-            <div class="section-heading"><h3 id="parameterFilterTitle">Strategy parameter filters</h3><p>Choose a swept parameter and one or more values. Hold Ctrl (Windows) or Cmd (Mac) while selecting multiple values; values within one parameter are matched together.</p></div>
-            <div class="parameter-filter-rows" id="parameterFilterRows"></div>
-            <div class="parameter-filter-actions"><button class="secondary-button" id="addParameterFilter" type="button">Add parameter filter</button><p id="parameterFilterStatus" role="status" aria-live="polite">Inspect a Parquet file to load swept parameters.</p></div>
-          </section>
           <label class="robustness-toggle" for="requireEntryRobustness"><input id="requireEntryRobustness" type="checkbox"><span><strong>Require entry-time robustness</strong><small>When enabled, only retain rows with a passing Before, After, or Both result. Leave it off to list every base combination and show robustness as an annotation.</small></span></label>
           <section class="ranking-builder" aria-labelledby="rankingBuilderTitle">
             <div class="section-heading"><h3 id="rankingBuilderTitle">Ranking builder</h3><p>Choose up to six numeric metrics. Weights must add up to 100%; direction decides whether higher or lower values rank first.</p></div>

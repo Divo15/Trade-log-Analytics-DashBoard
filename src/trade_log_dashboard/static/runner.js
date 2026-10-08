@@ -328,9 +328,11 @@ function readSweepFilters() {
     maximum_drawdown: $("filterMaximumDrawdown").value,
     latest_entry: $("filterLatestEntry").value,
     minimum_trades: $("filterMinimumTrades").value,
-    parameter_filters: readParameterFilters(),
+    parameter_filters: activeParameterFilters,
   };
 }
+
+let activeParameterFilters = [];
 
 function parameterFilterDefinitions() {
   return Object.entries(inspectedParquet?.filter_options || {}).map(([name, definition]) => ({name, label: parameterColumnLabel(name), ...definition}));
@@ -372,6 +374,11 @@ function updateParameterFilterStatus() {
 }
 
 function renderParameterFilters(drafts = null) {
+  activeParameterFilters = Array.isArray(drafts) ? drafts.filter(filter =>
+    filter?.column && (filter.mode === "range" || filter.mode === "ranges" ||
+      filter.mode === "values" || String(filter.value || "").trim())
+  ) : [];
+  return;
   const container = $("parameterFilterRows");
   if (!container || !inspectedParquet) return;
   const definitions = parameterFilterDefinitions();
@@ -1332,7 +1339,7 @@ $("applyRankedColumnFilters").addEventListener("click", () => {
   renderParameterFilters(readRankedColumnFilters());
   rankSweep();
 });
-$("addParameterFilter").addEventListener("click", () => {
+$("addParameterFilter")?.addEventListener("click", () => {
   const drafts = readParameterFilterDrafts();
   drafts.push({});
   renderParameterFilters(drafts);
