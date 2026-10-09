@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Independent analytics for deterministic backtest trade logs">
   <title>Trade-log Analytics</title>
-  <link rel="stylesheet" href="/app.css?v=20261006-22">
-  <link rel="stylesheet" href="/research.css?v=20261006-1">
+  <link rel="stylesheet" href="/app.css?v=20261009-7">
+  <link rel="stylesheet" href="/research.css?v=20261007-2">
 </head>
 <body>
   <a class="skip-link" href="#mainContent">Skip to content</a>
@@ -180,11 +180,11 @@
             <div class="section-heading"><div><h3 id="strategyDetailTitle" tabindex="-1">Strategy combination detail</h3><p id="strategyDetailSummary"></p></div><button class="secondary-button" id="closeStrategyDetail" type="button">Close details</button></div>
             <div class="strategy-detail-grid">
               <div><h4>Ranking components</h4><div class="table-scroll strategy-components-table" tabindex="0" role="region" aria-label="Ranking components"><table><thead><tr><th>Metric</th><th class="numeric">Value</th><th>Direction</th><th class="numeric">Weight</th><th class="numeric">Score</th><th class="numeric">Contribution</th></tr></thead><tbody id="strategyComponentsRows"></tbody></table></div></div>
-              <div><h4>All strategy parameters</h4><dl class="strategy-parameters" id="strategyParameters"></dl></div>
+              <div><h4>All Parquet fields</h4><dl class="strategy-parameters" id="strategyParameters"></dl></div>
             </div>
           </section>
         </section>
-        <p class="schema-note">Columns not mapped above remain available as strategy parameters and can be shown in the ranked combinations table.</p>
+        <p class="schema-note">Every Parquet field is retained. Ranking fields appear first; all remaining source fields are shown as separate horizontally scrollable columns.</p>
       </div>
     </section>
     <section class="panel storage-panel" id="storagePanel" hidden aria-labelledby="storageTitle">
@@ -419,7 +419,7 @@
 
   <footer>Trade-log Analytics</footer>
   <script src="/app.js?v=20260928-3" defer></script>
-  <script src="/runner.js?v=20261006-22" defer></script>
-  <script src="/research.js?v=20261006-1" defer></script>
+  <script src="/runner.js?v=20261009-7" defer></script>
+  <script src="/research.js?v=20261007-2" defer></script>
 </body>
 </html>

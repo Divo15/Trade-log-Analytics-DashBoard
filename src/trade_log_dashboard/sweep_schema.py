@@ -25,7 +25,7 @@ FIELD_DEFINITIONS: tuple[dict[str, Any], ...] = (
     {"key": "pnl_2026", "label": "2026 P&L", "kind": "numeric", "required": False,
      "aliases": ("pnl_2026", "net_pnl_2026", "profit_2026", "year_2026_pnl")},
     {"key": "entry_start", "label": "Entry time", "kind": "time", "required": True,
-     "aliases": ("entry_start", "entry_time", "entry", "start_time")},
+     "aliases": ("entry_start", "entry_time", "entry", "start_time", "monitor_start")},
     {"key": "mtm_dd_2025", "label": "2025 drawdown", "kind": "numeric", "required": False,
      "aliases": ("mtm_dd_2025", "drawdown_2025", "max_drawdown_2025", "dd_2025")},
     {"key": "mtm_dd_2026", "label": "2026 drawdown", "kind": "numeric", "required": False,
@@ -134,6 +134,9 @@ def _export_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not rows:
         raise ValueError("Rank at least one eligible combination before exporting.")
     parameter_names = sorted({str(name) for row in rows for name in (row.get("parameters") or {})})
+    parquet_field_names = sorted({
+        str(name) for row in rows for name in (row.get("parquet_fields") or {})
+    })
     component_count = max(len(row.get("ranking_components") or []) for row in rows)
     flattened = []
     for source in rows:
@@ -145,7 +148,13 @@ def _export_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "entry_start": source.get("entry_start"), "entry_robustness": source.get("entry_robustness"),
         }
         parameters = source.get("parameters") or {}
-        row.update({f"parameter_{name}": parameters.get(name) for name in parameter_names})
+        parquet_fields = source.get("parquet_fields") or {}
+        if parquet_fields:
+            row.update({name: parquet_fields.get(name) for name in parquet_field_names})
+        else:
+            # Backward compatibility for saved rows created before complete
+            # Parquet fields were retained.
+            row.update({f"parameter_{name}": parameters.get(name) for name in parameter_names})
         components = source.get("ranking_components") or []
         for index in range(component_count):
             prefix = f"ranking_component_{index + 1}_"
@@ -266,12 +275,13 @@ def _filter_option_label(value: Any, *, numeric: bool = False) -> str:
     return str(value)
 
 
-def _build_filter_options(path: Path, columns: list[dict[str, Any]], mapped_sources: set[str]) -> dict[str, dict[str, Any]]:
-    """Build exact-value or ten-bucket options for unmapped strategy parameters."""
+def _build_filter_options(path: Path, columns: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Build exact-value or ten-bucket options for filterable Parquet fields."""
     options: dict[str, dict[str, Any]] = {}
-    candidates = [column for column in columns if column["name"] not in mapped_sources
-                  and not _is_result_column(column["name"])
-                  and column["category"] in {"numeric", "text", "time", "boolean"}]
+    candidates = [
+        column for column in columns
+        if column["category"] in {"numeric", "text", "time", "boolean"}
+    ]
     connection = duckdb.connect()
 
     def identifier(name: str) -> str:
@@ -432,7 +442,7 @@ def inspect_sweep_parquet(path: Path, *, include_filter_options: bool = True) ->
         },
     }
     if include_filter_options:
-        result["filter_options"] = _build_filter_options(path, columns, {source for source in mapping.values() if source})
+        result["filter_options"] = _build_filter_options(path, columns)
     return result
 
 
@@ -679,6 +689,16 @@ def rank_sweep_parquet(
         column["name"] for column in report["columns"]
         if column["name"] not in mapped_sources and not is_result_column(column["name"])
     ]
+    fixed_display_sources = {
+        source
+        for source in (net_pnl, pnl_2025, pnl_2026, dd_2025, dd_2026, overall_dd, entry)
+        if source
+    }
+    parquet_field_columns = [
+        column["name"]
+        for column in report["columns"]
+        if column["name"] not in fixed_display_sources
+    ]
     if not parameter_columns:
         raise ValueError("No strategy-parameter columns were detected for entry-time robustness.")
     # Some sweep producers write cutoff_time as a duplicate of entry_start.
@@ -870,16 +890,55 @@ def rank_sweep_parquet(
         )
         SELECT row_number() OVER (ORDER BY final_score DESC, net_pnl DESC, ranking_drawdown ASC,
                                   parameter_key ASC, entry_minutes ASC) AS rank,
-               final_score, net_pnl, pnl_2025, pnl_2026, drawdown_2025, drawdown_2026, ranking_drawdown, entry_start, entry_robustness, before_variant_count, after_variant_count,
+               parameter_key, final_score, net_pnl, pnl_2025, pnl_2026, drawdown_2025, drawdown_2026, ranking_drawdown, entry_start, entry_robustness, before_variant_count, after_variant_count,
                eligible_count, before_count, after_count, both_count, not_confirmed_count, {component_select}, {output_parameters}
           FROM top_rows CROSS JOIN distribution
          ORDER BY rank
     """
     connection = duckdb.connect()
+    parquet_fields_by_key: dict[tuple[int, str | None], dict[str, Any]] = {}
     try:
         cursor = connection.execute(query, values)
         headers = [item[0] for item in cursor.description]
         rows = [dict(zip(headers, row)) for row in cursor.fetchall()]
+        if rows and parquet_field_columns:
+            selected_values_sql = ", ".join("(?, CAST(? AS VARCHAR))" for _ in rows)
+            selected_values: list[Any] = []
+            for row in rows:
+                selected_values.extend((row["parameter_key"], row["entry_start"]))
+            field_select = ", ".join(identifier(column) for column in parquet_field_columns)
+            enrichment_query = f"""
+                WITH selected_keys(parameter_key, entry_start) AS (
+                  VALUES {selected_values_sql}
+                ),
+                full_source AS (
+                  SELECT {parameter_key} AS parameter_key,
+                         CAST({identifier(entry)} AS VARCHAR) AS entry_start,
+                         CAST({identifier(net_pnl)} AS DOUBLE) AS __net_pnl,
+                         {field_select}
+                    FROM read_parquet(?)
+                ),
+                matched AS (
+                  SELECT full_source.*,
+                         row_number() OVER (
+                           PARTITION BY full_source.parameter_key, full_source.entry_start
+                           ORDER BY full_source.__net_pnl DESC
+                         ) AS __match_rank
+                    FROM full_source
+                    JOIN selected_keys
+                      ON full_source.parameter_key = selected_keys.parameter_key
+                     AND full_source.entry_start IS NOT DISTINCT FROM selected_keys.entry_start
+                )
+                SELECT parameter_key, entry_start, {field_select}
+                  FROM matched
+                 WHERE __match_rank = 1
+            """
+            enriched_cursor = connection.execute(enrichment_query, [*selected_values, str(path)])
+            enriched_headers = [item[0] for item in enriched_cursor.description]
+            for enriched_row in enriched_cursor.fetchall():
+                record = dict(zip(enriched_headers, enriched_row))
+                key = (int(record.pop("parameter_key")), record.pop("entry_start"))
+                parquet_fields_by_key[key] = record
         rejection_report = build_rejection_report(
             connection, path, base_clauses, values, entry_expression,
             drawdown_expression, query, require_robustness,
@@ -965,13 +1024,15 @@ def rank_sweep_parquet(
     result_rows = []
     for row in rows:
         parameters = {column: row.pop(column) for column in parameter_columns}
+        row_key = (int(row.pop("parameter_key")), row.get("entry_start"))
+        parquet_fields = parquet_fields_by_key.get(row_key, dict(parameters))
         # Expose cutoff separately as well as retaining the original parameter.
         # This makes it available to fixed dashboard columns and detail views,
         # even when a sweep producer uses a cutoff alias.
         cutoff_time = next(
             (
                 parameters.get(name)
-                for name in ("cutoff_time", "cutoff", "cutoff_point", "cutoff_start")
+                for name in ("cutoff_time", "cutoff", "cutoff_point", "cutoff_start", "monitor_cutoff")
                 if parameters.get(name) not in (None, "")
             ),
             None,
@@ -993,7 +1054,12 @@ def rank_sweep_parquet(
                 "percentile_score": score,
                 "weighted_contribution": score * item["weight"] / 100.0,
             })
-        result_rows.append({**row, "parameters": parameters, "ranking_components": components})
+        result_rows.append({
+            **row,
+            "parameters": parameters,
+            "parquet_fields": parquet_fields,
+            "ranking_components": components,
+        })
     return {
         "source_row_count": report["file"]["row_count"],
         "rejection_report": rejection_report,

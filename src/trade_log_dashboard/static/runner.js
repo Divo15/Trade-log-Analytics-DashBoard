@@ -13,6 +13,7 @@ let selectedSweepIndex = null;
 let recommendedSweepIndex = null;
 let inspectedParquet = null;
 let rankedSweepPayload = null;
+let activeRankedDisplayFilters = [];
 const rankingPresetStorageKey = "trade-log-dashboard.ranking-presets.v1";
 let rankingStartedAt = null;
 let rankingElapsedTimer = null;
@@ -667,6 +668,7 @@ async function inspectParquet() {
     $("parquetStatus").textContent = "This Parquet file is larger than the 1.5 GiB limit.";
     return;
   }
+  activeRankedDisplayFilters = [];
   $("inspectParquetButton").disabled = true;
   $("parquetInput").disabled = true;
   $("parquetStatus").textContent = "Reading Parquet metadata and detecting column mappings…";
@@ -725,34 +727,245 @@ function parameterColumnLabel(key) {
 
 // Sweep generators do not all use the same cutoff column name.  Keep it in
 // the fixed result column rather than showing it twice as a strategy setting.
-const CUTOFF_PARAMETER_NAMES = ["cutoff_time", "cutoff", "cutoff_point", "cutoff_start"];
+const CUTOFF_PARAMETER_NAMES = ["cutoff_time", "cutoff", "cutoff_point", "cutoff_start", "monitor_cutoff"];
 
 function cutoffValue(row) {
   if (row.cutoff_time !== undefined && row.cutoff_time !== null && row.cutoff_time !== "") {
     return row.cutoff_time;
   }
-  const parameters = row.parameters || {};
+  const parameters = row.parquet_fields || row.parameters || {};
   return CUTOFF_PARAMETER_NAMES.map(name => parameters[name])
     .find(value => value !== undefined && value !== null && value !== "") ?? "—";
 }
 
-function rankedParameterColumns(rows) {
+function rankedParquetColumns(rows) {
   const columns = [];
   const seen = new Set();
-  rows.forEach(row => Object.keys(row.parameters || {}).forEach(key => {
+  rows.forEach(row => Object.keys(row.parquet_fields || row.parameters || {}).forEach(key => {
     if (!CUTOFF_PARAMETER_NAMES.includes(key) && !seen.has(key)) { seen.add(key); columns.push(key); }
   }));
   return columns;
 }
 
-function renderRankedSweepHeader(parameterColumns) {
-  const headerRow = document.createElement("tr");
-  const fixedHeaders = [
-    ["Rank", ""], ["Final score", "numeric"], ["Net P&L", "numeric"],
-    ["2025 P&L", "numeric"], ["2026 P&L", "numeric"], ["2025 DD", "numeric"], ["2026 DD", "numeric"], ["Drawdown", "numeric"],
-    ["Robustness", ""], ["Entry", ""], ["Cutoff", ""],
+function formatParquetValue(value) {
+  if (value == null || value === "") return "—";
+  if (typeof value === "number" && Number.isFinite(value)) return formatDetailNumber(value);
+  if (typeof value === "object") {
+    try { return JSON.stringify(value); } catch (_) { return String(value); }
+  }
+  return String(value);
+}
+
+function rankedFixedColumns() {
+  return [
+    {key: "rank", label: "Rank", className: "", numeric: true, exact: true},
+    {key: "final_score", label: "Final score", className: "numeric", numeric: true},
+    {key: "net_pnl", label: "Net P&L", className: "numeric", numeric: true, money: true},
+    {key: "pnl_2025", label: "2025 P&L", className: "numeric", numeric: true, money: true},
+    {key: "pnl_2026", label: "2026 P&L", className: "numeric", numeric: true, money: true},
+    {key: "drawdown_2025", label: "2025 DD", className: "numeric", numeric: true, money: true},
+    {key: "drawdown_2026", label: "2026 DD", className: "numeric", numeric: true, money: true},
+    {key: "ranking_drawdown", label: "Drawdown", className: "numeric", numeric: true, money: true},
+    {key: "entry_robustness", label: "Robustness", className: ""},
+    {key: "entry_start", label: "Entry", className: ""},
+    {key: "cutoff_time", label: "Cutoff", className: ""},
   ];
-  fixedHeaders.forEach(([label, className]) => {
+}
+
+function rankedFixedValue(row, key) {
+  return key === "cutoff_time" ? cutoffValue(row) : row[key];
+}
+
+function rankedFixedOptionLabel(column, value) {
+  if (column.key === "rank") return `#${number.format(value)}`;
+  if (column.key === "entry_robustness") return robustnessLabel(value).split(" · ")[0];
+  if (value === "—") return "No evidence";
+  if (column.money) return money.format(value);
+  if (column.numeric) return number.format(value);
+  return String(value);
+}
+
+function rankedFixedFilterDefinition(column, rows) {
+  const values = rows.map(row => rankedFixedValue(row, column.key)).filter(value =>
+    value !== null && value !== undefined && value !== "" && (column.numeric || value !== "—")
+  );
+  if (!values.length) return {mode: "values", values: []};
+  if (!column.numeric) {
+    const unique = [...new Set(values.map(String))].sort((left, right) => left.localeCompare(right, undefined, {numeric: true}));
+    return {mode: "values", values: unique.map(value => ({label: rankedFixedOptionLabel(column, value), value}))};
+  }
+  const unique = [...new Set(values.map(Number).filter(Number.isFinite))].sort((left, right) => left - right);
+  if (column.exact || unique.length <= 10) {
+    return {mode: "values", values: unique.map(value => ({label: rankedFixedOptionLabel(column, value), value}))};
+  }
+  const minimum = unique[0];
+  const maximum = unique[unique.length - 1];
+  if (minimum === maximum) {
+    return {mode: "values", values: [{label: rankedFixedOptionLabel(column, minimum), value: minimum}]};
+  }
+  const width = (maximum - minimum) / 10;
+  return {mode: "ranges", values: Array.from({length: 10}, (_, index) => {
+    const lower = minimum + width * index;
+    const upper = index === 9 ? maximum : minimum + width * (index + 1);
+    return {
+      label: `${rankedFixedOptionLabel(column, lower)} – ${rankedFixedOptionLabel(column, upper)}`,
+      min: lower,
+      max: upper,
+      include_max: index === 9,
+    };
+  })};
+}
+
+function rankedDisplayFilterMatches(row, filter) {
+  const value = rankedFixedValue(row, filter.key);
+  return filter.choices.some(choice => {
+    if (choice.mode === "range") {
+      const numericValue = Number(value);
+      return Number.isFinite(numericValue) && numericValue >= choice.min &&
+        (choice.include_max ? numericValue <= choice.max : numericValue < choice.max);
+    }
+    return String(value) === String(choice.value);
+  });
+}
+
+function filteredRankedRows(rows) {
+  return activeRankedDisplayFilters.length
+    ? rows.filter(row => activeRankedDisplayFilters.every(filter => rankedDisplayFilterMatches(row, filter)))
+    : rows;
+}
+
+function createRankedChoiceFilterControl({
+  key, labelText, options: optionDefinitions, selectedValues, datasetName, emptyText = "No values available",
+}) {
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.className = "ranked-filter-trigger";
+  trigger.setAttribute("aria-label", `Filter ${labelText}`);
+  const popover = document.createElement("div");
+  const popoverId = `ranked-filter-${datasetName}-${key.replace(/[^a-z0-9_-]/gi, "-")}`;
+  popover.id = popoverId;
+  popover.className = "ranked-filter-popover";
+  popover.setAttribute("popover", "auto");
+  trigger.setAttribute("popovertarget", popoverId);
+  const heading = document.createElement("strong");
+  heading.textContent = `Filter ${labelText}`;
+  const options = document.createElement("div");
+  options.className = "ranked-filter-options";
+  optionDefinitions.forEach(option => {
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.dataset[datasetName] = key;
+    checkbox.value = option.value;
+    checkbox.checked = selectedValues.has(option.value);
+    label.append(checkbox, document.createTextNode(option.label));
+    options.append(label);
+  });
+  if (!optionDefinitions.length) {
+    const empty = document.createElement("span");
+    empty.className = "ranked-filter-empty";
+    empty.textContent = emptyText;
+    options.append(empty);
+  }
+  const actions = document.createElement("div");
+  actions.className = "ranked-filter-popover-actions";
+  const clear = document.createElement("button");
+  clear.type = "button";
+  clear.className = "text-button";
+  clear.textContent = "Clear";
+  const done = document.createElement("button");
+  done.type = "button";
+  done.className = "secondary-button";
+  done.textContent = "Done";
+  actions.append(clear, done);
+  popover.append(heading, options, actions);
+  const update = () => {
+    const count = options.querySelectorAll("input:checked").length;
+    trigger.textContent = count ? `${labelText} · ${count}` : `All ${labelText}`;
+  };
+  options.addEventListener("change", () => {
+    update();
+    const count = rankedFilterSelectionCount();
+    $("rankedColumnFilterStatus").textContent = `${count} field filter${count === 1 ? "" : "s"} staged. Click Apply filters & rerank.`;
+  });
+  clear.addEventListener("click", () => {
+    options.querySelectorAll("input").forEach(input => { input.checked = false; });
+    update();
+  });
+  done.addEventListener("click", () => popover.hidePopover());
+  popover.addEventListener("toggle", event => {
+    if (event.newState !== "open") return;
+    const rect = trigger.getBoundingClientRect();
+    popover.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - 292))}px`;
+    popover.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - 340)}px`;
+  });
+  update();
+  document.body.append(popover);
+  return trigger;
+}
+
+function createRankedFixedFilterControl(column) {
+  const definition = rankedFixedFilterDefinition(column, rankedSweepPayload?.rows || []);
+  const selected = activeRankedDisplayFilters.find(filter => filter.key === column.key);
+  const selectedValues = new Set((selected?.choices || []).map(choice => JSON.stringify(choice)));
+  const options = definition.values.map(option => ({
+    label: option.label,
+    value: JSON.stringify(definition.mode === "ranges"
+      ? {mode: "range", min: option.min, max: option.max, include_max: option.include_max}
+      : {mode: "value", value: option.value}),
+  }));
+  return createRankedChoiceFilterControl({
+    key: column.key,
+    labelText: column.label,
+    options,
+    selectedValues,
+    datasetName: "rankedDisplayChoice",
+  });
+}
+
+function createRankedParameterFilterControl(key) {
+  const labelText = parameterColumnLabel(key);
+  const definition = inspectedParquet?.filter_options?.[key];
+  const selected = activeParameterFilters.find(filter => filter.column === key);
+  if (definition?.mode === "search") {
+    const input = document.createElement("input");
+    input.type = "search";
+    input.dataset.rankedParameterSearch = key;
+    input.placeholder = `Search ${labelText}`;
+    input.setAttribute("aria-label", `Filter ${labelText}`);
+    input.value = selected?.mode === "values" ? selected.values?.[0] || "" : selected?.value || "";
+    input.addEventListener("input", () => {
+      const count = rankedFilterSelectionCount();
+      $("rankedColumnFilterStatus").textContent = `${count} field filter${count === 1 ? "" : "s"} staged. Click Apply filters & rerank.`;
+    });
+    return input;
+  }
+
+  const selectedValues = selected?.mode === "ranges"
+    ? selected.ranges.map(range => JSON.stringify({min: range.min, max: range.max, include_max: range.include_max}))
+    : selected?.mode === "values" ? selected.values.map(String)
+    : selected?.value != null ? [String(selected.value)] : [];
+  const options = (definition?.values || []).map(option => ({
+    label: option.label,
+    value: definition.mode === "ranges"
+      ? JSON.stringify({min: option.min, max: option.max, include_max: option.include_max})
+      : String(option.value),
+  }));
+  return createRankedChoiceFilterControl({
+    key,
+    labelText,
+    options,
+    selectedValues: new Set(selectedValues),
+    datasetName: "rankedParameterChoice",
+    emptyText: "No filter options available",
+  });
+}
+
+function renderRankedSweepHeader(parameterColumns) {
+  document.querySelectorAll(".ranked-filter-popover").forEach(popover => popover.remove());
+  const headerRow = document.createElement("tr");
+  const fixedHeaders = rankedFixedColumns();
+  fixedHeaders.forEach(({label, className}) => {
     const cell = document.createElement("th");
     cell.textContent = label;
     cell.className = className;
@@ -770,42 +983,16 @@ function renderRankedSweepHeader(parameterColumns) {
   headerRow.append(details);
   const filterRow = document.createElement("tr");
   filterRow.className = "ranked-column-filters";
-  fixedHeaders.forEach(() => filterRow.append(document.createElement("th")));
+  fixedHeaders.forEach(column => {
+    const cell = document.createElement("th");
+    cell.className = "fixed-column-filter";
+    cell.append(createRankedFixedFilterControl(column));
+    filterRow.append(cell);
+  });
   parameterColumns.forEach(key => {
     const cell = document.createElement("th");
     cell.className = "parameter-column-filter";
-    const select = document.createElement("select");
-    select.dataset.rankedParameterFilter = key;
-    select.setAttribute("aria-label", `Filter ${parameterColumnLabel(key)}`);
-    const definition = inspectedParquet?.filter_options?.[key];
-    select.append(new Option(`All ${parameterColumnLabel(key)}`, ""));
-    if (definition?.mode === "search") {
-      const input = document.createElement("input");
-      input.type = "search";
-      input.dataset.rankedParameterFilter = key;
-      input.placeholder = `Search ${parameterColumnLabel(key)}`;
-      input.setAttribute("aria-label", `Filter ${parameterColumnLabel(key)}`);
-      cell.replaceChildren(input);
-      filterRow.append(cell);
-      return;
-    }
-    select.multiple = Boolean(definition);
-    select.size = 1;
-    select.title = definition ? "Hold Ctrl (Windows) or Cmd (Mac) to select more than one option." : "";
-    (definition?.values || []).forEach(option => {
-      const value = definition.mode === "ranges" ? JSON.stringify({min: option.min, max: option.max, include_max: option.include_max}) : option.value;
-      select.append(new Option(option.label, value));
-    });
-    const selected = readParameterFilters().find(filter => filter.column === key);
-    const selectedValues = selected?.mode === "ranges"
-      ? selected.ranges.map(range => JSON.stringify({min: range.min, max: range.max, include_max: range.include_max}))
-      : selected?.mode === "values" ? selected.values : selected?.value ? [selected.value] : [];
-    const selectedSet = new Set(selectedValues);
-    [...select.options].forEach(option => { option.selected = selectedSet.has(option.value); });
-    select.addEventListener("change", () => {
-      $("rankedColumnFilterStatus").textContent = `${rankedFilterSelectionCount()} parameter values staged. Click Apply filters & rerank.`;
-    });
-    cell.append(select);
+    cell.append(createRankedParameterFilterControl(key));
     filterRow.append(cell);
   });
   const actionCell = document.createElement("th");
@@ -816,10 +1003,13 @@ function renderRankedSweepHeader(parameterColumns) {
 }
 
 function readRankedColumnFilters() {
-  return [...document.querySelectorAll("[data-ranked-parameter-filter]")].flatMap(control => {
-    const column = control.dataset.rankedParameterFilter;
-    const values = control.multiple ? [...control.selectedOptions].map(option => option.value).filter(Boolean) : [control.value?.trim?.() || ""].filter(Boolean);
-    if (!column || !values.length) return [];
+  const grouped = new Map();
+  document.querySelectorAll("[data-ranked-parameter-choice]:checked").forEach(control => {
+    const column = control.dataset.rankedParameterChoice;
+    if (!grouped.has(column)) grouped.set(column, []);
+    grouped.get(column).push(control.value);
+  });
+  const filters = [...grouped.entries()].flatMap(([column, values]) => {
     const definition = inspectedParquet?.filter_options?.[column];
     if (definition?.mode === "ranges") {
       const ranges = values.flatMap(value => { try { return [JSON.parse(value)]; } catch (_) { return []; } });
@@ -827,10 +1017,27 @@ function readRankedColumnFilters() {
     }
     return [{column, mode: "values", values}];
   });
+  document.querySelectorAll("[data-ranked-parameter-search]").forEach(control => {
+    const value = control.value.trim();
+    if (value) filters.push({column: control.dataset.rankedParameterSearch, mode: "values", values: [value]});
+  });
+  return filters;
+}
+
+function readRankedDisplayFilters() {
+  const grouped = new Map();
+  document.querySelectorAll("[data-ranked-display-choice]:checked").forEach(control => {
+    const key = control.dataset.rankedDisplayChoice;
+    if (!grouped.has(key)) grouped.set(key, []);
+    try { grouped.get(key).push(JSON.parse(control.value)); } catch (_) {}
+  });
+  return [...grouped.entries()].map(([key, choices]) => ({key, choices}));
 }
 
 function rankedFilterSelectionCount() {
-  return readRankedColumnFilters().reduce((count, filter) => count + (filter.values?.length || filter.ranges?.length || 1), 0);
+  const parameterCount = readRankedColumnFilters().reduce((count, filter) => count + (filter.values?.length || filter.ranges?.length || 1), 0);
+  const displayCount = readRankedDisplayFilters().reduce((count, filter) => count + filter.choices.length, 0);
+  return parameterCount + displayCount;
 }
 
 function robustnessLabel(value, beforeCount = 0, afterCount = 0) {
@@ -898,7 +1105,7 @@ function showStrategyDetail(row, trigger) {
   $("strategyComponentsRows").replaceChildren(...componentRows);
   // Always show these two timing settings prominently. Cutoff remains visible
   // even if an older response did not retain it in `parameters`.
-  const parameterEntries = Object.entries(row.parameters || {})
+  const parameterEntries = Object.entries(row.parquet_fields || row.parameters || {})
     .filter(([key]) => !CUTOFF_PARAMETER_NAMES.includes(key));
   const detailEntries = [
     ["entry_start", row.entry_start],
@@ -910,10 +1117,10 @@ function showStrategyDetail(row, trigger) {
       const term = document.createElement("dt");
       term.textContent = key;
       const definition = document.createElement("dd");
-      definition.textContent = String(value ?? "—");
+      definition.textContent = formatParquetValue(value);
       return [term, definition];
     })
-    : [Object.assign(document.createElement("dd"), {textContent: "No unmapped strategy parameters were found."})];
+    : [Object.assign(document.createElement("dd"), {textContent: "No additional Parquet fields were found."})];
   $("strategyParameters").replaceChildren(...parameterNodes);
   $("strategyDetail").hidden = false;
   trigger?.setAttribute("aria-expanded", "true");
@@ -1114,9 +1321,9 @@ async function copyRunSummary() {
 function renderRankedSweep(payload) {
   rankedSweepPayload = payload;
   const robustnessRequired = Boolean(payload.run_summary?.entry_robustness?.required);
-  const parameterColumns = rankedParameterColumns(payload.rows || []);
+  const parameterColumns = rankedParquetColumns(payload.rows || []);
   renderRankedSweepHeader(parameterColumns);
-  $("rankedTableToolbar").hidden = !parameterColumns.length;
+  $("rankedTableToolbar").hidden = !payload.rows?.length;
   const rankingDescription = (payload.ranking || []).map(criterion =>
     `${criterion.weight}% ${criterion.label} (${criterion.direction === "higher" ? "higher" : "lower"} is better)`
   ).join(" · ");
@@ -1126,7 +1333,8 @@ function renderRankedSweep(payload) {
       ? `${number.format(payload.eligible_count)} combinations passed all filters and required entry-time robustness. Score: ${rankingDescription}.`
       : `${number.format(payload.eligible_count)} base combinations passed the selected filters and were ranked one by one. Robustness is shown as an annotation. Score: ${rankingDescription}.`
     : zeroEligibleReason(payload);
-  const rows = payload.rows.map(row => {
+  const matchingRows = filteredRankedRows(payload.rows || []);
+  const rows = matchingRows.map(row => {
     const element = document.createElement("tr");
     const values = [
       row.rank,
@@ -1157,9 +1365,10 @@ function renderRankedSweep(payload) {
     });
     parameterColumns.forEach(key => {
       const cell = document.createElement("td");
-      const value = row.parameters?.[key];
+      const value = (row.parquet_fields || row.parameters || {})[key];
       cell.className = "parameter-value";
-      cell.textContent = value == null || value === "" ? "—" : formatDetailNumber(value);
+      cell.textContent = formatParquetValue(value);
+      cell.title = cell.textContent;
       element.append(cell);
     });
     const detailCell = document.createElement("td");
@@ -1191,7 +1400,9 @@ function renderRankedSweep(payload) {
     const cell = document.createElement("td");
     cell.colSpan = 12 + parameterColumns.length;
     cell.className = "empty-table";
-    cell.textContent = zeroEligibleReason(payload);
+    cell.textContent = payload.rows?.length
+      ? "No ranked combinations match the selected table filters."
+      : zeroEligibleReason(payload);
     empty.append(cell);
     rows.push(empty);
   }
@@ -1336,6 +1547,7 @@ $("exportRankedCsv").addEventListener("click", () => exportRankedSweep("csv"));
 $("exportRankedParquet").addEventListener("click", () => exportRankedSweep("parquet"));
 $("exportRankedExcel").addEventListener("click", () => exportRankedSweep("xlsx"));
 $("applyRankedColumnFilters").addEventListener("click", () => {
+  activeRankedDisplayFilters = readRankedDisplayFilters();
   renderParameterFilters(readRankedColumnFilters());
   rankSweep();
 });

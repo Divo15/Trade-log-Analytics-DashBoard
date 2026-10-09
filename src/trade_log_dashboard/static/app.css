@@ -21,6 +21,7 @@
   --focus: oklch(0.60 0.15 245);
   --radius: 12px;
   --z-sticky: 20;
+  --z-popover: 40;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-synthesis: none;
 }
@@ -343,12 +344,36 @@ td { font-size: 13px; padding-block: 13px; }
 #copyRunSummaryStatus { margin-left: 8px; color: var(--muted); font-size: 11px; }
 .ranked-sweep-table { max-height: min(620px, calc(100vh - 220px)); border-top: 1px solid var(--line); }
 .ranked-sweep-table thead th { background: var(--surface-muted); }
+.ranked-sweep-table thead tr:first-child th { top: 0; z-index: 3; height: 44px; color: var(--ink); font-weight: 700; }
+.ranked-sweep-table thead .ranked-column-filters th { top: 44px; z-index: 2; }
 .ranked-sweep-table th.parameter-column { min-width: 128px; white-space: nowrap; }
 .ranked-sweep-table td.parameter-value { min-width: 128px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .ranked-table-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 30px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--surface-muted); color: var(--muted); font-size: 12px; }
 .ranked-table-filter-action { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .ranked-sweep-table thead .ranked-column-filters th { padding: 7px 10px; background: color-mix(in oklch, var(--surface-muted) 82%, var(--surface)); }
 .ranked-column-filters select, .ranked-column-filters input { width: 100%; min-width: 120px; min-height: 38px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font-size: 11px; }
+.ranked-column-filters .fixed-column-filter { min-width: 118px; padding-inline: 4px; }
+.ranked-column-filters .fixed-column-filter:first-child { width: 118px; min-width: 118px; }
+.ranked-column-filters .parameter-column-filter { min-width: 150px; padding-inline: 4px; }
+.ranked-column-filters .fixed-column-filter select { min-width: 0; font-variant-numeric: tabular-nums; }
+.ranked-column-filters .fixed-column-filter:first-child select { width: 108px; min-width: 108px; }
+.ranked-filter-trigger { position: relative; width: 100%; min-height: 38px; padding: 7px 28px 7px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); font: inherit; font-size: 11px; font-weight: 600; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.ranked-filter-trigger::after { content: "⌄"; position: absolute; right: 10px; color: var(--muted); }
+.ranked-column-filters .fixed-column-filter { position: sticky; }
+.ranked-filter-popover { position: fixed; inset: auto; width: min(280px, calc(100vw - 24px)); max-height: 320px; margin: 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); box-shadow: 0 6px 8px color-mix(in oklch, var(--ink) 14%, transparent); z-index: 40; }
+.ranked-filter-popover::backdrop { background: transparent; }
+.ranked-filter-popover > strong { display: block; margin-bottom: 10px; font-size: 12px; }
+.ranked-filter-options { display: grid; gap: 3px; max-height: 210px; overflow-y: auto; }
+.ranked-filter-options label { display: flex; align-items: center; gap: 9px; min-height: 34px; padding: 6px 7px; border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; }
+.ranked-filter-options label:hover { background: var(--surface-muted); }
+.ranked-filter-options input { width: 16px; height: 16px; margin: 0; accent-color: var(--primary); }
+.ranked-filter-empty { padding: 10px 7px; color: var(--muted); font-size: 12px; }
+.ranked-filter-popover-actions { display: flex; justify-content: space-between; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.ranked-filter-popover-actions .secondary-button { min-height: 32px; padding: 6px 11px; }
+.ranked-column-filters select:hover { border-color: color-mix(in oklch, var(--primary) 38%, var(--line)); }
+.ranked-filter-trigger:hover { border-color: color-mix(in oklch, var(--primary) 38%, var(--line)); }
+.ranked-column-filters select:focus-visible { outline: 3px solid color-mix(in oklch, var(--focus) 28%, transparent); outline-offset: 1px; }
+.ranked-filter-trigger:focus-visible { outline: 3px solid color-mix(in oklch, var(--focus) 28%, transparent); outline-offset: 1px; }
 .ranked-column-filters select[multiple], .parameter-filter-value select[multiple] { cursor: pointer; }
 .ranked-column-filters select[multiple]:focus, .parameter-filter-value select[multiple]:focus { outline: 3px solid color-mix(in oklch, var(--primary) 24%, transparent); outline-offset: 1px; }
 .parameter-filter-rows { display: grid; gap: 10px; }
