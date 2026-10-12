@@ -140,11 +140,6 @@
             <div class="ranking-builder-rows" id="rankingBuilderRows"></div>
             <div class="ranking-builder-actions"><button class="secondary-button" id="addRankingCriterion" type="button">Add criterion</button><p id="rankingBuilderStatus" role="status" aria-live="polite"></p></div>
           </section>
-          <section class="ranking-presets" aria-labelledby="rankingPresetsTitle">
-            <div class="section-heading"><h3 id="rankingPresetsTitle">Saved ranking presets</h3><p>Store this mapping, filter, and ranking setup in this browser for repeated sweep analysis.</p></div>
-            <div class="ranking-presets-controls"><label for="rankingPresetName">Preset name<input id="rankingPresetName" type="text" maxlength="64" placeholder="For example: Conservative 10:00"></label><button class="secondary-button" id="saveRankingPreset" type="button">Save preset</button><label for="rankingPresetSelect">Saved preset<select id="rankingPresetSelect"><option value="">Choose a preset</option></select></label><button class="secondary-button" id="loadRankingPreset" type="button">Load preset</button><button class="text-button" id="deleteRankingPreset" type="button">Delete</button></div>
-            <p class="ranking-preset-status" id="rankingPresetStatus" role="status" aria-live="polite"></p>
-          </section>
           <div class="filter-actions"><button class="secondary-button" id="filterPreviewButton" type="button">Preview base combinations</button><button class="primary-button" id="rankSweepButton" type="button">Rank combinations</button><p id="filterPreviewStatus" role="status" aria-live="polite"></p></div>
           <div class="rank-progress" id="rankProgress" hidden aria-live="polite"><progress id="rankProgressMeter" max="100" value="0">0%</progress><div><strong id="rankProgressLabel">Preparing ranking…</strong><span id="rankProgressElapsed">Elapsed 0s</span></div></div>
         </section>
@@ -410,7 +405,7 @@
 
   <footer>Trade-log Analytics</footer>
   <script src="/app.js?v=20260928-3" defer></script>
-  <script src="/runner.js?v=20261012-2" defer></script>
+  <script src="/runner.js?v=20261012-3" defer></script>
   <script src="/research.js?v=20261007-2" defer></script>
 </body>
 </html>

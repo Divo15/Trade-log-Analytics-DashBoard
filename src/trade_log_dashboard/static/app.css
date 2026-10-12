@@ -309,14 +309,6 @@ td { font-size: 13px; padding-block: 13px; }
 .ranking-builder-row select, .ranking-builder-row input { min-width: 0; width: 100%; padding: 8px 9px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink); background: var(--surface); font: inherit; font-size: 12px; }
 .ranking-builder-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 0 22px 20px; }
 .ranking-builder-actions p { margin: 0; color: var(--muted); font-size: 12px; }
-.ranking-presets { border-top: 1px solid var(--line); }
-.ranking-presets h3 { margin: 0; font-size: 0.95rem; }
-.ranking-presets-controls { display: grid; grid-template-columns: minmax(170px, 1fr) auto minmax(170px, 1fr) auto auto; gap: 10px; align-items: end; padding: 4px 22px 10px; }
-.ranking-presets-controls label { display: grid; gap: 6px; color: var(--ink); font-size: 12px; font-weight: 650; }
-.ranking-presets-controls input, .ranking-presets-controls select { min-width: 0; width: 100%; padding: 8px 9px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink); background: var(--surface); font: inherit; font-size: 12px; }
-.ranking-presets-controls .secondary-button { min-height: 34px; padding: 7px 9px; font-size: 12px; white-space: nowrap; }
-.ranking-presets-controls .text-button { margin-bottom: 5px; white-space: nowrap; }
-.ranking-preset-status { min-height: 18px; margin: 0; padding: 0 22px 18px; color: var(--muted); font-size: 12px; }
 .text-button { min-height: auto; padding: 6px 4px; border: 0; color: var(--muted); background: transparent; font: inherit; font-size: 12px; font-weight: 650; text-decoration: underline; text-underline-offset: 3px; }
 .text-button:hover:not(:disabled) { color: var(--negative); }
 .text-button:disabled { opacity: .45; cursor: not-allowed; }
@@ -535,9 +527,6 @@ td { font-size: 13px; padding-block: 13px; }
   .filter-actions, .ranking-builder-actions { align-items: flex-start; flex-direction: column; padding-inline: 16px; }
   .rank-progress { grid-template-columns: 1fr; padding-inline: 16px; }
   .ranking-builder-rows { padding-inline: 16px; }
-  .ranking-presets-controls { grid-template-columns: 1fr 1fr; padding-inline: 16px; }
-  .ranking-presets-controls label { grid-column: 1 / -1; }
-  .ranking-preset-status { padding-inline: 16px; }
   .robustness-legend { padding-inline: 16px; }
   .run-summary { padding-inline: 16px; }
   .run-summary dl { grid-template-columns: 1fr; gap: 0; }

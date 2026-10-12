@@ -14,7 +14,6 @@ let recommendedSweepIndex = null;
 let inspectedParquet = null;
 let rankedSweepPayload = null;
 let activeRankedDisplayFilters = [];
-const rankingPresetStorageKey = "trade-log-dashboard.ranking-presets.v1";
 let rankingStartedAt = null;
 let rankingElapsedTimer = null;
 const displayDate = new Intl.DateTimeFormat("en-IN", {day:"numeric", month:"short", year:"numeric", timeZone:"UTC"});
@@ -436,81 +435,6 @@ function renderParameterFilters(drafts = null) {
   updateParameterFilterStatus();
 }
 
-function savedRankingPresets() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(rankingPresetStorageKey) || "[]");
-    return Array.isArray(stored) ? stored.filter(item => item && typeof item.name === "string") : [];
-  } catch (_) {
-    return [];
-  }
-}
-
-function persistRankingPresets(presets) {
-  localStorage.setItem(rankingPresetStorageKey, JSON.stringify(presets));
-}
-
-function renderRankingPresets(selectedName = "") {
-  const presets = savedRankingPresets();
-  const select = $("rankingPresetSelect");
-  select.replaceChildren(new Option("Choose a preset", ""), ...presets.map(preset => new Option(preset.name, preset.name)));
-  select.value = presets.some(preset => preset.name === selectedName) ? selectedName : "";
-  $("loadRankingPreset").disabled = !select.value;
-  $("deleteRankingPreset").disabled = !select.value;
-}
-
-function saveRankingPreset() {
-  const name = $("rankingPresetName").value.trim();
-  const ranking = readRankingCriteria();
-  if (!name) {
-    $("rankingPresetStatus").textContent = "Enter a preset name before saving.";
-    return;
-  }
-  if (!ranking || !inspectedParquet) {
-    $("rankingPresetStatus").textContent = "Inspect a Parquet file and fix the ranking builder before saving.";
-    return;
-  }
-  try {
-    const presets = savedRankingPresets().filter(preset => preset.name !== name);
-    presets.push({name, mapping: schemaMapping(), filters: readSweepFilters(), ranking, require_robustness: $("requireEntryRobustness").checked, saved_at: new Date().toISOString()});
-    persistRankingPresets(presets);
-    renderRankingPresets(name);
-    $("rankingPresetStatus").textContent = `Saved “${name}” in this browser.`;
-  } catch (_) {
-    $("rankingPresetStatus").textContent = "This browser could not save the preset.";
-  }
-}
-
-function loadRankingPreset() {
-  if (!inspectedParquet) {
-    $("rankingPresetStatus").textContent = "Inspect a Parquet file before loading a preset.";
-    return;
-  }
-  const name = $("rankingPresetSelect").value;
-  const preset = savedRankingPresets().find(item => item.name === name);
-  if (!preset) return;
-  const filters = preset.filters || {};
-  const filterIds = {
-    status: "filterStatus", minimum_pnl: "filterMinimumPnl", maximum_pnl: "filterMaximumPnl",
-    maximum_drawdown: "filterMaximumDrawdown", latest_entry: "filterLatestEntry", minimum_trades: "filterMinimumTrades",
-  };
-  Object.entries(filterIds).forEach(([key, id]) => { $(id).value = filters[key] ?? ""; });
-  $("requireEntryRobustness").checked = preset.require_robustness === true;
-  renderRankingBuilder(Array.isArray(preset.ranking) ? preset.ranking : defaultRankingCriteria());
-  validateSchemaMapping();
-  $("rankingPresetStatus").textContent = `Loaded “${name}”.`;
-}
-
-function deleteRankingPreset() {
-  const name = $("rankingPresetSelect").value;
-  if (!name) return;
-  try {
-    persistRankingPresets(savedRankingPresets().filter(preset => preset.name !== name));
-    renderRankingPresets();
-    $("rankingPresetStatus").textContent = `Deleted “${name}”.`;
-  } catch (_) {
-    $("rankingPresetStatus").textContent = "This browser could not delete the preset.";
-  }
-}
 
 function validateSchemaMapping() {
   if (!inspectedParquet) return;
@@ -602,7 +526,6 @@ function renderSchemaInspection(payload) {
   $("parquetWorkspace").hidden = false;
   renderParameterFilters();
   renderRankingBuilder();
-  renderRankingPresets();
   validateSchemaMapping();
 }
 
@@ -1516,14 +1439,6 @@ $("addParameterFilter")?.addEventListener("click", () => {
   const drafts = readParameterFilterDrafts();
   drafts.push({});
   renderParameterFilters(drafts);
-});
-$("saveRankingPreset").addEventListener("click", saveRankingPreset);
-$("loadRankingPreset").addEventListener("click", loadRankingPreset);
-$("deleteRankingPreset").addEventListener("click", deleteRankingPreset);
-$("rankingPresetSelect").addEventListener("change", () => {
-  const selected = $("rankingPresetSelect").value;
-  $("loadRankingPreset").disabled = !selected;
-  $("deleteRankingPreset").disabled = !selected;
 });
 $("addRankingCriterion").addEventListener("click", () => {
   const criteria = [...document.querySelectorAll("[data-ranking-row]")].map(row => ({
