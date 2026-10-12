@@ -209,8 +209,7 @@ function schemaIssue(code, field, message, severity = "error") {
 function schemaMapping() {
   if (!inspectedParquet) return {};
   return Object.fromEntries(inspectedParquet.fields.map(field => {
-    const select = document.querySelector(`[data-schema-field="${field.key}"]`);
-    return [field.key, select?.value || ""];
+    return [field.key, field.suggested_source || ""];
   }));
 }
 
@@ -489,16 +488,6 @@ function loadRankingPreset() {
   const name = $("rankingPresetSelect").value;
   const preset = savedRankingPresets().find(item => item.name === name);
   if (!preset) return;
-  const unavailable = [];
-  for (const field of inspectedParquet.fields) {
-    const select = document.querySelector(`[data-schema-field="${field.key}"]`);
-    const source = preset.mapping?.[field.key] || "";
-    if (source && [...select.options].some(option => option.value === source)) select.value = source;
-    else {
-      select.value = "";
-      if (source) unavailable.push(source);
-    }
-  }
   const filters = preset.filters || {};
   const filterIds = {
     status: "filterStatus", minimum_pnl: "filterMinimumPnl", maximum_pnl: "filterMaximumPnl",
@@ -508,9 +497,7 @@ function loadRankingPreset() {
   $("requireEntryRobustness").checked = preset.require_robustness === true;
   renderRankingBuilder(Array.isArray(preset.ranking) ? preset.ranking : defaultRankingCriteria());
   validateSchemaMapping();
-  $("rankingPresetStatus").textContent = unavailable.length
-    ? `Loaded “${name}”. Remap unavailable columns: ${unavailable.join(", ")}.`
-    : `Loaded “${name}”.`;
+  $("rankingPresetStatus").textContent = `Loaded “${name}”.`;
 }
 
 function deleteRankingPreset() {
@@ -535,8 +522,7 @@ function validateSchemaMapping() {
     .map(issue => schemaIssue(issue.code, issue.field, issue.message, "warning"));
 
   for (const field of inspectedParquet.fields) {
-    const select = document.querySelector(`[data-schema-field="${field.key}"]`);
-    const source = select?.value || "";
+    const source = field.suggested_source || "";
     const typeCell = document.querySelector(`[data-schema-type="${field.key}"]`);
     if (field.required && !source) {
       errors.push(schemaIssue("missing_mapping", field.key, `Map a Parquet column to ${field.label}.`));
@@ -613,40 +599,6 @@ function renderSchemaInspection(payload) {
   $("schemaFileName").textContent = payload.file.name;
   $("schemaRowCount").textContent = number.format(payload.file.row_count);
   $("schemaColumnCount").textContent = number.format(payload.columns.length);
-  const rows = payload.fields.map(field => {
-    const row = document.createElement("tr");
-    const labelCell = document.createElement("td");
-    const label = document.createElement("strong");
-    label.textContent = field.label;
-    labelCell.append(label);
-    if (!field.required) {
-      const optional = document.createElement("small");
-      optional.textContent = "Optional";
-      labelCell.append(optional);
-    }
-    const kindCell = document.createElement("td");
-    kindCell.textContent = field.kind;
-    const selectCell = document.createElement("td");
-    const select = document.createElement("select");
-    select.dataset.schemaField = field.key;
-    select.setAttribute("aria-label", `Parquet column for ${field.label}`);
-    select.append(new Option(field.required ? "Choose a column" : "Not mapped", ""));
-    for (const column of payload.columns) select.append(new Option(column.name, column.name));
-    select.value = field.suggested_source || "";
-    select.addEventListener("change", validateSchemaMapping);
-    selectCell.append(select);
-    if (field.confidence) {
-      const hint = document.createElement("small");
-      hint.textContent = field.confidence === "exact" ? "Automatically matched" : "Suggested from a similar name";
-      selectCell.append(hint);
-    }
-    const typeCell = document.createElement("td");
-    typeCell.dataset.schemaType = field.key;
-    typeCell.textContent = payload.columns.find(column => column.name === select.value)?.type || "—";
-    row.append(labelCell, kindCell, selectCell, typeCell);
-    return row;
-  });
-  $("schemaMappingRows").replaceChildren(...rows);
   $("parquetWorkspace").hidden = false;
   renderParameterFilters();
   renderRankingBuilder();
@@ -681,7 +633,7 @@ async function inspectParquet() {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "The Parquet schema could not be inspected.");
     renderSchemaInspection(payload);
-    $("parquetStatus").textContent = "Schema inspection complete. Review the mappings and validation report.";
+    $("parquetStatus").textContent = "Columns detected automatically. Review the validation report.";
   } catch (error) {
     $("parquetWorkspace").hidden = true;
     $("parquetStatus").textContent = error.message;
