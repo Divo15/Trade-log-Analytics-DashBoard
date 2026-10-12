@@ -738,6 +738,11 @@ function cutoffValue(row) {
     .find(value => value !== undefined && value !== null && value !== "") ?? "—";
 }
 
+function cutoffSourceColumn() {
+  const options = inspectedParquet?.filter_options || {};
+  return CUTOFF_PARAMETER_NAMES.find(name => options[name]) || null;
+}
+
 function rankedParquetColumns(rows) {
   const columns = [];
   const seen = new Set();
@@ -905,6 +910,10 @@ function createRankedChoiceFilterControl({
 }
 
 function createRankedFixedFilterControl(column) {
+  const cutoffSource = column.key === "cutoff_time" ? cutoffSourceColumn() : null;
+  if (cutoffSource) {
+    return createRankedParameterFilterControl(cutoffSource, column.label);
+  }
   const definition = rankedFixedFilterDefinition(column, rankedSweepPayload?.rows || []);
   const selected = activeRankedDisplayFilters.find(filter => filter.key === column.key);
   const selectedValues = new Set((selected?.choices || []).map(choice => JSON.stringify(choice)));
@@ -923,8 +932,8 @@ function createRankedFixedFilterControl(column) {
   });
 }
 
-function createRankedParameterFilterControl(key) {
-  const labelText = parameterColumnLabel(key);
+function createRankedParameterFilterControl(key, labelOverride = null) {
+  const labelText = labelOverride || parameterColumnLabel(key);
   const definition = inspectedParquet?.filter_options?.[key];
   const selected = activeParameterFilters.find(filter => filter.column === key);
   if (definition?.mode === "search") {
