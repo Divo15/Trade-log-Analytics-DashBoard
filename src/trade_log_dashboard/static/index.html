@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Independent analytics for deterministic backtest trade logs">
   <title>Trade-log Analytics</title>
-  <link rel="stylesheet" href="/app.css?v=20261009-7">
+  <link rel="stylesheet" href="/app.css?v=20261013-3">
   <link rel="stylesheet" href="/research.css?v=20261007-2">
 </head>
 <body>
@@ -95,7 +95,7 @@
 
     <section class="panel parquet-panel" id="parquetPanel" hidden aria-labelledby="parquetTitle">
       <div class="panel-heading">
-        <div><h1 id="parquetTitle" tabindex="-1">Rank a sweep Parquet</h1><p>List and rank base strategy combinations one by one. Entry-time robustness can be kept as an annotation or required for a strict shortlist.</p></div>
+        <div><h1 id="parquetTitle" tabindex="-1">Find durable sweep combinations</h1><p>Rank combinations across every available year, then verify that nearby entry times remain robust.</p></div>
         <button class="secondary-button" id="parquetDoneButton" type="button">Back to backtest</button>
       </div>
       <div class="parquet-upload-row">
@@ -131,16 +131,17 @@
             <label for="filterMinimumPnl">Net P&amp;L greater than<input id="filterMinimumPnl" type="number" value="0" step="any"></label>
             <label for="filterMaximumPnl">Maximum net P&amp;L<input id="filterMaximumPnl" type="number" step="any" placeholder="No maximum"></label>
             <label for="filterMaximumDrawdown">Maximum drawdown<input id="filterMaximumDrawdown" type="number" min="0" step="any" placeholder="No maximum"></label>
-            <label for="filterLatestEntry">Latest entry time<input id="filterLatestEntry" type="time" value="10:00"></label>
+            <label for="filterLatestEntry">Latest entry time<input id="filterLatestEntry" type="time"><small id="filterLatestEntryHelp">Full time range is required for best-10-time groups.</small></label>
             <label for="filterMinimumTrades">Minimum completed trades<input id="filterMinimumTrades" type="number" min="0" step="1" placeholder="Not mapped"></label>
           </div>
+          <p class="time-group-filter-policy" id="timeGroupFilterPolicy">Best-10 mode uses every successful row with valid P&amp;L and drawdown. Strategy-column selections restrict complete fixed-parameter groups; optional outcome limits are relaxed so they cannot remove individual time variants.</p>
           <label class="robustness-toggle" for="requireEntryRobustness"><input id="requireEntryRobustness" type="checkbox"><span><strong>Require entry-time robustness</strong><small>When enabled, only retain rows with a passing Before, After, or Both result. Leave it off to list every base combination and show robustness as an annotation.</small></span></label>
           <section class="ranking-builder" aria-labelledby="rankingBuilderTitle">
-            <div class="section-heading"><h3 id="rankingBuilderTitle">Ranking builder</h3><p>Choose up to six numeric metrics. Weights must add up to 100%; direction decides whether higher or lower values rank first.</p></div>
+            <div class="section-heading"><h3 id="rankingBuilderTitle">Best 10-time group ranking</h3><p>Every strategy parameter stays fixed and only time changes. The dashboard sums P&amp;L and row-level drawdown across 10 distinct times, then ranks the complete baskets using 60% higher total P&amp;L and 40% lower combined drawdown.</p></div>
             <div class="ranking-builder-rows" id="rankingBuilderRows"></div>
-            <div class="ranking-builder-actions"><button class="secondary-button" id="addRankingCriterion" type="button">Add criterion</button><p id="rankingBuilderStatus" role="status" aria-live="polite"></p></div>
+            <div class="ranking-builder-actions"><button class="secondary-button" id="useTimeDiversification" type="button">Use best-10-time preset</button><button class="secondary-button" id="addRankingCriterion" type="button">Add criterion</button><p id="rankingBuilderStatus" role="status" aria-live="polite"></p></div>
           </section>
-          <div class="filter-actions"><button class="secondary-button" id="filterPreviewButton" type="button">Preview base combinations</button><button class="primary-button" id="rankSweepButton" type="button">Rank combinations</button><p id="filterPreviewStatus" role="status" aria-live="polite"></p></div>
+          <div class="filter-actions"><button class="secondary-button" id="filterPreviewButton" type="button">Preview base combinations</button><button class="primary-button" id="rankSweepButton" type="button">Find best groups of 10 times</button><p id="filterPreviewStatus" role="status" aria-live="polite"></p></div>
           <div class="rank-progress" id="rankProgress" hidden aria-live="polite"><progress id="rankProgressMeter" max="100" value="0">0%</progress><div><strong id="rankProgressLabel">Preparing ranking…</strong><span id="rankProgressElapsed">Elapsed 0s</span></div></div>
         </section>
         <section class="ranked-sweep" id="rankedSweep" hidden aria-labelledby="rankedSweepTitle">
@@ -151,7 +152,7 @@
             <div class="section-heading"><h3 id="sweepChartsTitle">Ranked strategy analysis</h3><p>Charts use the displayed top combinations; robustness distribution covers every eligible combination.</p></div>
             <div class="sweep-chart-grid">
               <figure><figcaption>P&amp;L versus drawdown</figcaption><div class="chart-shell sweep-chart" id="sweepScatterChart" role="img" tabindex="0"></div></figure>
-              <figure><figcaption>Yearly P&amp;L by rank</figcaption><div class="chart-shell sweep-chart" id="sweepYearlyChart" role="img" tabindex="0"></div><p class="sweep-chart-legend"><span>2025</span><span>2026</span></p></figure>
+              <figure><figcaption>Yearly P&amp;L by rank</figcaption><div class="chart-shell sweep-chart" id="sweepYearlyChart" role="img" tabindex="0"></div><p class="sweep-chart-legend" id="sweepYearlyLegend"></p></figure>
               <figure><figcaption>Robustness distribution</figcaption><div class="chart-shell sweep-chart" id="sweepDistributionChart" role="img" tabindex="0"></div></figure>
             </div>
           </section>
@@ -403,9 +404,21 @@
     </section>
   </main>
 
+  <div class="ranking-loading-screen" id="rankingLoadingScreen" hidden role="status" aria-live="polite" aria-atomic="false">
+    <section class="ranking-loading-panel" aria-labelledby="rankingLoadingTitle">
+      <div class="ranking-loading-heading">
+        <span class="ranking-loading-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+        <div><h2 id="rankingLoadingTitle">Ranking 10-time groups</h2><p>Keeping every strategy parameter fixed while time changes.</p></div>
+      </div>
+      <strong class="ranking-loading-label" id="rankingLoadingLabel">Preparing Parquet ranking…</strong>
+      <progress id="rankingLoadingMeter" max="100" value="0">0%</progress>
+      <div class="ranking-loading-meta"><span>Large sweep files may take a little time. Keep this page open.</span><strong id="rankingLoadingElapsed">Elapsed 0s</strong></div>
+    </section>
+  </div>
+
   <footer>Trade-log Analytics</footer>
   <script src="/app.js?v=20260928-3" defer></script>
-  <script src="/runner.js?v=20261012-3" defer></script>
+  <script src="/runner.js?v=20261013-7" defer></script>
   <script src="/research.js?v=20261007-2" defer></script>
 </body>
 </html>

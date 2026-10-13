@@ -31,7 +31,13 @@ from .runner import LocalRunner
 from .research import ResearchManager, connection_status
 from .datasets import catalog
 from .storage import StorageLayout, close_logging, configure_logging, load_storage
-from .sweep_schema import export_ranked_sweep, inspect_sweep_parquet, preview_sweep_filters, rank_sweep_parquet
+from .sweep_schema import (
+    export_ranked_sweep,
+    inspect_sweep_parquet,
+    preview_sweep_filters,
+    rank_sweep_parquet,
+    rank_sweep_time_groups,
+)
 
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
@@ -140,10 +146,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "rank": row.get("rank"),
                 "selection_score": row.get("final_score"),
                 "metrics": {
+                    "time_diversification_score": row.get("time_diversification_score"),
                     "net_pnl": row.get("net_pnl"),
+                    "group_total_pnl": row.get("group_total_pnl"),
+                    "group_average_pnl": row.get("group_average_pnl"),
+                    "group_minimum_pnl": row.get("group_minimum_pnl"),
+                    "group_combined_drawdown": row.get("group_combined_drawdown"),
+                    "group_worst_drawdown": row.get("group_worst_drawdown"),
+                    "group_average_drawdown": row.get("group_average_drawdown"),
+                    "group_pnl_drawdown_ratio": row.get("group_pnl_drawdown_ratio"),
+                    "time_member_count": row.get("time_member_count"),
+                    "pnl_2024": row.get("pnl_2024"),
                     "pnl_2025": row.get("pnl_2025"),
                     "pnl_2026": row.get("pnl_2026"),
                     "max_drawdown": row.get("ranking_drawdown"),
+                    "drawdown_2024": row.get("drawdown_2024"),
                     "drawdown_2025": row.get("drawdown_2025"),
                     "drawdown_2026": row.get("drawdown_2026"),
                     "entry_robustness": row.get("entry_robustness"),
@@ -422,6 +439,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             mapping = json.loads(self.headers.get("X-Sweep-Mapping", "{}"))
             filters = json.loads(self.headers.get("X-Sweep-Filters", "{}"))
             ranking = json.loads(self.headers.get("X-Sweep-Ranking", "null"))
+            sweep_mode = self.headers.get("X-Sweep-Mode", "time-group").strip().lower()
             require_robustness = json.loads(self.headers.get("X-Sweep-Robustness", "false"))
             if not isinstance(mapping, dict) or not isinstance(filters, dict):
                 raise ValueError("Sweep mapping and filters must be objects.")
@@ -429,6 +447,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 raise ValueError("Sweep ranking criteria must be a list.")
             if not isinstance(require_robustness, bool):
                 raise ValueError("Entry-time robustness selection must be true or false.")
+            if sweep_mode not in {"time-group", "individual"}:
+                raise ValueError("Sweep ranking mode is invalid.")
         except (ValueError, json.JSONDecodeError):
             self._json(HTTPStatus.BAD_REQUEST, {"error": "Sweep ranking request is invalid."})
             return
@@ -447,10 +467,95 @@ class DashboardHandler(BaseHTTPRequestHandler):
                             raise ValueError("Upload was interrupted. Choose the Parquet file and retry.")
                         destination.write(chunk)
                         remaining -= len(chunk)
-                result = rank_sweep_parquet(
-                    parquet_path, mapping, filters, top_n=20, ranking=ranking,
-                    require_robustness=require_robustness,
-                )
+                time_group_ranking = sweep_mode == "time-group"
+                if time_group_ranking:
+                    # Best-10 grouping is the default dashboard workflow. Do
+                    # not let an already-open browser tab submit its previous
+                    # individual-ranking criteria after a server update.
+                    ranking = [
+                        {"column": "__time_group_pnl", "weight": 60, "direction": "higher"},
+                        {"column": "__time_group_drawdown", "weight": 40, "direction": "lower"},
+                    ]
+                    # Time-group ranking has a fixed semantic contract. Re-detect its
+                    # metric fields from the uploaded file so a stale browser mapping
+                    # cannot accidentally turn an entry time or result into a grouping
+                    # parameter and eliminate every otherwise-complete group.
+                    schema = inspect_sweep_parquet(parquet_path, include_filter_options=False)
+                    detected_mapping = {
+                        field["key"]: field.get("suggested_source") or ""
+                        for field in schema["fields"]
+                    }
+                    mapping = {
+                        **mapping,
+                        **{
+                            key: source
+                            for key, source in detected_mapping.items()
+                            if source
+                        },
+                    }
+                    # A sweep may vary a cutoff/monitor time while its nominal
+                    # entry start stays constant. For best-10 grouping, select
+                    # the time-like strategy field with the most variants.
+                    time_candidates = []
+                    for column in schema["columns"]:
+                        name = str(column["name"])
+                        tokens = set(re.findall(r"[a-z0-9]+", name.lower()))
+                        if tokens.intersection({"time", "start", "cutoff", "delay", "minute", "minutes", "min"}):
+                            time_candidates.append(name)
+                    current_time_source = mapping.get("entry_start")
+                    if current_time_source and current_time_source not in time_candidates:
+                        time_candidates.append(current_time_source)
+                    if time_candidates:
+                        def quote_identifier(name: str) -> str:
+                            return '"' + name.replace('"', '""') + '"'
+
+                        count_sql = ", ".join(
+                            f"count(DISTINCT CAST({quote_identifier(name)} AS VARCHAR))"
+                            for name in time_candidates
+                        )
+                        time_connection = duckdb.connect()
+                        try:
+                            counts = time_connection.execute(
+                                f"SELECT {count_sql} FROM read_parquet(?)", [str(parquet_path)]
+                            ).fetchone()
+                        finally:
+                            time_connection.close()
+                        time_variant_counts = dict(zip(time_candidates, map(int, counts)))
+                        best_time_source = max(
+                            time_candidates,
+                            key=lambda name: (time_variant_counts[name], name == current_time_source),
+                        )
+                        if time_variant_counts[best_time_source] >= 2:
+                            mapping["entry_start"] = best_time_source
+                    filters = {
+                        **filters,
+                        "status": "succeeded",
+                        "minimum_pnl": "",
+                        "maximum_pnl": "",
+                        "maximum_drawdown": "",
+                        "latest_entry": "",
+                        "minimum_trades": "",
+                    }
+                    result = rank_sweep_time_groups(
+                        parquet_path, mapping, filters, group_size=10, top_n=20,
+                        ranking=ranking,
+                    )
+                    LOGGER.info(
+                        "Time-group ranking file=%s source_rows=%s eligible_groups=%s "
+                        "available_times=%s displayed=%s mapping=%s",
+                        Path(self.headers.get("X-Sweep-File-Name", "sweep.parquet")).name,
+                        result["source_row_count"],
+                        result["eligible_count"],
+                        result.get("time_group", {}).get("available_time_count"),
+                        len(result.get("rows", [])),
+                        mapping,
+                    )
+                else:
+                    result = rank_sweep_parquet(
+                        parquet_path, mapping, filters, top_n=20, ranking=ranking,
+                        require_robustness=require_robustness,
+                    )
+                effective_robustness = require_robustness and not time_group_ranking
                 result["run_summary"] = {
                     "input_file": Path(self.headers.get("X-Sweep-File-Name", "sweep.parquet")).name,
                     "input_size_bytes": length,
@@ -459,11 +564,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "filters": filters,
                     "column_mapping": mapping,
                     "ranking": result["ranking"],
+                    "time_group": result.get("time_group", {"enabled": False}),
+                    "time_diversification": result["time_diversification"],
                     "entry_robustness": {
                         "threshold_ratio": 0.70,
                         "window_minutes": 20,
-                        "required": require_robustness,
-                        "mode": "strict_filter" if require_robustness else "annotation_only",
+                        "required": effective_robustness,
+                        "mode": "strict_filter" if effective_robustness else "annotation_only",
                     },
                 }
                 self._json(HTTPStatus.OK, result)

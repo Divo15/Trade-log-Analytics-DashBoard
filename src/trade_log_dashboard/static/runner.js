@@ -212,9 +212,22 @@ function schemaMapping() {
   }));
 }
 
+function mappedYearlyPnlColumns() {
+  const mapping = schemaMapping();
+  return [2024, 2025, 2026]
+    .map(year => ({year, column: mapping[`pnl_${year}`]}))
+    .filter(item => item.column);
+}
+
 function rankingColumnOptions() {
   if (!inspectedParquet) return [];
+  const timeDiversification = mappedYearlyPnlColumns().length >= 2
+    ? [{value: "__time_diversification", label: "Time diversification (weakest-year percentile)"}]
+    : [];
   return [
+    {value: "__time_group_pnl", label: "Group total P&L (10 times)"},
+    {value: "__time_group_drawdown", label: "Group combined drawdown (10 times)"},
+    ...timeDiversification,
     {value: "__ranking_drawdown", label: "Ranking drawdown (derived)"},
     ...inspectedParquet.columns
       .filter(column => column.category === "numeric")
@@ -223,19 +236,37 @@ function rankingColumnOptions() {
 }
 
 function defaultRankingCriteria() {
-  const mapping = schemaMapping();
-  if (mapping.pnl_2025 && mapping.pnl_2026) {
-    return [
-      {column: mapping.pnl_2025, weight: 30, direction: "higher"},
-      {column: mapping.pnl_2026, weight: 30, direction: "higher"},
-      {column: "__ranking_drawdown", weight: 40, direction: "lower"},
-    ];
-  }
-  const yearlyPnl = mapping.pnl_2025 || mapping.pnl_2026 || "";
   return [
-    {column: yearlyPnl, weight: 60, direction: "higher"},
-    {column: "__ranking_drawdown", weight: 40, direction: "lower"},
+    {column: "__time_group_pnl", weight: 60, direction: "higher"},
+    {column: "__time_group_drawdown", weight: 40, direction: "lower"},
   ];
+}
+
+function usesTimeGroupRanking(criteria = []) {
+  return criteria.some(criterion =>
+    criterion.column === "__time_group_pnl" || criterion.column === "__time_group_drawdown"
+  );
+}
+
+function syncTimeGroupControls(criteria = []) {
+  const enabled = usesTimeGroupRanking(criteria);
+  const relaxedFields = [
+    ["filterStatus", "succeeded"],
+    ["filterMinimumPnl", ""],
+    ["filterMaximumPnl", ""],
+    ["filterMaximumDrawdown", ""],
+    ["filterLatestEntry", ""],
+    ["filterMinimumTrades", ""],
+  ];
+  relaxedFields.forEach(([id, value]) => {
+    const control = $(id);
+    control.disabled = enabled;
+    if (enabled) control.value = value;
+  });
+  $("filterLatestEntryHelp").textContent = enabled
+    ? "Full time range is required for best-10-time groups."
+    : "Optional upper limit for individual-combination ranking.";
+  $("timeGroupFilterPolicy").hidden = !enabled;
 }
 
 function readRankingCriteria() {
@@ -295,6 +326,16 @@ function renderRankingBuilder(criteria = defaultRankingCriteria()) {
     direction.setAttribute("aria-label", "Ranking direction");
     direction.append(new Option("Higher is better", "higher"), new Option("Lower is better", "lower"));
     direction.value = criterion.direction;
+    const syncDirection = () => {
+      const fixedDirection = {
+        __time_diversification: "higher",
+        __time_group_pnl: "higher",
+        __time_group_drawdown: "lower",
+      }[column.value];
+      if (fixedDirection) direction.value = fixedDirection;
+      direction.disabled = Boolean(fixedDirection);
+    };
+    syncDirection();
 
     const remove = document.createElement("button");
     remove.type = "button";
@@ -311,12 +352,17 @@ function renderRankingBuilder(criteria = defaultRankingCriteria()) {
       validateSchemaMapping();
     });
     [column, weight, direction].forEach(control => control.addEventListener("input", validateSchemaMapping));
-    [column, direction].forEach(control => control.addEventListener("change", validateSchemaMapping));
+    column.addEventListener("change", () => {
+      syncDirection();
+      validateSchemaMapping();
+    });
+    direction.addEventListener("change", validateSchemaMapping);
     row.append(column, weight, direction, remove);
     return row;
   });
   container.replaceChildren(...rows);
   $("addRankingCriterion").disabled = criteria.length >= 6;
+  syncTimeGroupControls(criteria);
 }
 
 function readSweepFilters() {
@@ -474,11 +520,13 @@ function validateSchemaMapping() {
   }
 
   const mapping = schemaMapping();
-  if (!mapping.pnl_2025 && !mapping.pnl_2026) {
+  const mappedYears = mappedYearlyPnlColumns().map(item => item.year);
+  if (!mappedYears.length) {
     errors.push(schemaIssue("missing_yearly_pnl", "yearly_pnl", "Map at least one yearly P&L column."));
   }
-  if (!mapping.mtm_drawdown && !(mapping.mtm_dd_2025 && mapping.mtm_dd_2026)) {
-    errors.push(schemaIssue("missing_drawdown", "drawdown", "Map overall drawdown, or map both 2025 and 2026 drawdown."));
+  const hasEveryYearlyDrawdown = mappedYears.every(year => mapping[`mtm_dd_${year}`]);
+  if (!mapping.mtm_drawdown && !hasEveryYearlyDrawdown) {
+    errors.push(schemaIssue("missing_drawdown", "drawdown", "Map overall drawdown, or map drawdown for every mapped P&L year."));
   }
   if (!mapping.completed_trade_count) {
     warnings.push(schemaIssue("optional_mapping", "completed_trade_count", "Completed trades is not mapped; trade-count filtering will be unavailable.", "warning"));
@@ -496,6 +544,7 @@ function validateSchemaMapping() {
   $("rankSweepButton").disabled = errors.length > 0 || !ranking;
   $("filterMinimumTrades").disabled = !mapping.completed_trade_count;
   $("filterMinimumTrades").placeholder = mapping.completed_trade_count ? "Optional" : "Map completed trades first";
+  syncTimeGroupControls(ranking || []);
   $("filterPreviewStatus").textContent = "";
   $("rankedSweep").hidden = true;
   const issues = [...errors, ...warnings];
@@ -637,12 +686,35 @@ function formatParquetValue(value) {
 }
 
 function rankedFixedColumns() {
+  if (rankedSweepPayload?.time_group?.enabled) {
+    return [
+      {key: "rank", label: "Rank", className: "", numeric: true, exact: true},
+      {key: "final_score", label: "Final score", className: "numeric", numeric: true},
+      {key: "group_total_pnl", label: "Total P&L", className: "numeric", numeric: true, money: true},
+      {key: "group_combined_drawdown", label: "Combined DD", className: "numeric", numeric: true, money: true},
+      {key: "group_pnl_drawdown_ratio", label: "P&L / combined DD", className: "numeric", numeric: true},
+      {key: "group_average_pnl", label: "Average P&L", className: "numeric", numeric: true, money: true},
+      {key: "group_minimum_pnl", label: "Lowest P&L", className: "numeric", numeric: true, money: true},
+      {key: "group_worst_drawdown", label: "Worst individual DD", className: "numeric", numeric: true, money: true},
+      {key: "group_average_drawdown", label: "Average drawdown", className: "numeric", numeric: true, money: true},
+      {key: "time_member_count", label: "Time variants", className: "numeric", numeric: true, exact: true},
+      {key: "pnl_2024", label: "2024 total P&L", className: "numeric", numeric: true, money: true},
+      {key: "pnl_2025", label: "2025 total P&L", className: "numeric", numeric: true, money: true},
+      {key: "pnl_2026", label: "2026 total P&L", className: "numeric", numeric: true, money: true},
+      {key: "drawdown_2024", label: "2024 combined DD", className: "numeric", numeric: true, money: true},
+      {key: "drawdown_2025", label: "2025 combined DD", className: "numeric", numeric: true, money: true},
+      {key: "drawdown_2026", label: "2026 combined DD", className: "numeric", numeric: true, money: true},
+    ];
+  }
   return [
     {key: "rank", label: "Rank", className: "", numeric: true, exact: true},
     {key: "final_score", label: "Final score", className: "numeric", numeric: true},
+    {key: "time_diversification_score", label: "Time diversification", className: "numeric", numeric: true},
     {key: "net_pnl", label: "Net P&L", className: "numeric", numeric: true, money: true},
+    {key: "pnl_2024", label: "2024 P&L", className: "numeric", numeric: true, money: true},
     {key: "pnl_2025", label: "2025 P&L", className: "numeric", numeric: true, money: true},
     {key: "pnl_2026", label: "2026 P&L", className: "numeric", numeric: true, money: true},
+    {key: "drawdown_2024", label: "2024 DD", className: "numeric", numeric: true, money: true},
     {key: "drawdown_2025", label: "2025 DD", className: "numeric", numeric: true, money: true},
     {key: "drawdown_2026", label: "2026 DD", className: "numeric", numeric: true, money: true},
     {key: "ranking_drawdown", label: "Drawdown", className: "numeric", numeric: true, money: true},
@@ -658,6 +730,7 @@ function rankedFixedValue(row, key) {
 
 function rankedFixedOptionLabel(column, value) {
   if (column.key === "rank") return `#${number.format(value)}`;
+  if (column.key === "time_diversification_score") return `${(Number(value) * 100).toFixed(1)}%`;
   if (column.key === "entry_robustness") return robustnessLabel(value).split(" · ")[0];
   if (value === "—") return "No evidence";
   if (column.money) return money.format(value);
@@ -968,7 +1041,16 @@ function formatDetailNumber(value) {
 }
 
 function showStrategyDetail(row, trigger) {
-  $("strategyDetailSummary").textContent = `Rank ${row.rank} · Final score ${formatDetailNumber(row.final_score)} · Entry ${row.entry_start} · ${robustnessLabel(row.entry_robustness)} robustness`;
+  const timeGroup = Boolean(row.time_members?.length);
+  const timeColumn = rankedSweepPayload?.time_group?.time_column || "entry_start";
+  const timeScore = timeGroup
+    ? `P&L / combined DD ${formatDetailNumber(row.group_pnl_drawdown_ratio)}`
+    : row.time_diversification_score == null
+      ? "Time diversification not used"
+      : `Time diversification ${(Number(row.time_diversification_score) * 100).toFixed(1)}%`;
+  $("strategyDetailSummary").textContent = timeGroup
+    ? `Rank ${row.rank} · ${row.time_member_count} distinct ${timeColumn} values · Total P&L ${money.format(row.group_total_pnl)} · Combined drawdown ${money.format(row.group_combined_drawdown)} · ${timeScore}`
+    : `Rank ${row.rank} · Final score ${formatDetailNumber(row.final_score)} · ${timeScore} · Entry ${row.entry_start} · ${robustnessLabel(row.entry_robustness)} robustness`;
   const componentRows = (row.ranking_components || []).map(component => {
     const element = document.createElement("tr");
     [
@@ -991,11 +1073,13 @@ function showStrategyDetail(row, trigger) {
   // even if an older response did not retain it in `parameters`.
   const parameterEntries = Object.entries(row.parquet_fields || row.parameters || {})
     .filter(([key]) => !CUTOFF_PARAMETER_NAMES.includes(key));
-  const detailEntries = [
-    ["entry_start", row.entry_start],
-    ["cutoff_time", cutoffValue(row)],
-    ...parameterEntries,
-  ];
+  const memberEntries = (row.time_members || []).map(member => [
+    `${timeColumn}_${member.entry_start}`,
+    `P&L ${money.format(member.net_pnl)} · Drawdown ${money.format(member.ranking_drawdown)} · selection contribution ${formatDetailNumber(member.selection_contribution)}`,
+  ]);
+  const detailEntries = timeGroup
+    ? [[`selected_${timeColumn}_values`, row.time_members.map(member => member.entry_start).join(", ")], ...memberEntries, ...parameterEntries]
+    : [["entry_start", row.entry_start], ["cutoff_time", cutoffValue(row)], ...parameterEntries];
   const parameterNodes = detailEntries.length
     ? detailEntries.flatMap(([key, value]) => {
       const term = document.createElement("dt");
@@ -1048,21 +1132,34 @@ function renderSweepScatter(rows) {
 function renderSweepYearlyChart(rows) {
   const host = $("sweepYearlyChart");
   if (!rows.length) { host.textContent = "No eligible combinations to chart."; return; }
+  const series = [2024, 2025, 2026]
+    .map(year => ({year, key: `pnl_${year}`, className: `sweep-bar-${year}`}))
+    .filter(item => rows.some(row => row[item.key] != null && Number.isFinite(Number(row[item.key]))));
+  if (!series.length) { host.textContent = "No yearly P&L values to chart."; return; }
+  $("sweepYearlyLegend").replaceChildren(...series.map(item => {
+    const label = document.createElement("span");
+    label.className = `sweep-legend-${item.year}`;
+    label.textContent = item.year;
+    return label;
+  }));
   const width = 560, height = 220, left = 64, right = 20, top = 18, bottom = 38;
-  const scale = chartScale(rows.flatMap(row => [Number(row.pnl_2025), Number(row.pnl_2026)]));
+  const scale = chartScale(rows.flatMap(row => series.map(item => Number(row[item.key]))));
   const y = value => top + (scale.high - value) / (scale.high - scale.low) * (height - top - bottom);
   const slot = (width - left - right) / rows.length;
-  const barWidth = Math.max(3, Math.min(15, slot * .3));
+  const barWidth = Math.max(2, Math.min(11, slot * .22));
+  const groupWidth = series.length * barWidth + (series.length - 1) * 2;
   const zero = y(0);
   const bars = rows.map((row, index) => {
     const origin = left + slot * index + slot / 2;
-    return [[row.pnl_2025, "sweep-bar-2025", -barWidth - 1, "2025"], [row.pnl_2026, "sweep-bar-2026", 1, "2026"]].map(([value, className, offset, year]) => {
+    return series.map((item, seriesIndex) => {
+      const value = row[item.key];
+      const offset = -groupWidth / 2 + seriesIndex * (barWidth + 2);
       const py = y(Number(value));
-      return `<rect class="${className}" x="${origin + offset}" y="${Math.min(py, zero)}" width="${barWidth}" height="${Math.max(2, Math.abs(zero - py))}" rx="2"><title>Rank ${row.rank}, ${year}: ${money.format(value)}</title></rect>`;
+      return `<rect class="${item.className}" x="${origin + offset}" y="${Math.min(py, zero)}" width="${barWidth}" height="${Math.max(2, Math.abs(zero - py))}" rx="2"><title>Rank ${row.rank}, ${item.year}: ${money.format(value)}</title></rect>`;
     }).join("") + (index % Math.ceil(rows.length / 8) === 0 || index === rows.length - 1 ? `<text class="axis-label" x="${origin}" y="${height-10}" text-anchor="middle">#${row.rank}</text>` : "");
   }).join("");
   host.innerHTML = `<svg viewBox="0 0 ${width} ${height}" aria-hidden="true"><line class="zero-line" x1="${left}" y1="${zero}" x2="${width-right}" y2="${zero}"/>${bars}<text class="axis-label" x="${left}" y="14">${money.format(scale.high)}</text><text class="axis-label" x="${left}" y="${height-25}">${money.format(scale.low)}</text></svg>`;
-  host.setAttribute("aria-label", `2025 and 2026 P and L comparison for ${rows.length} displayed ranked strategies.`);
+  host.setAttribute("aria-label", `${series.map(item => item.year).join(", ")} P and L comparison for ${rows.length} displayed ranked strategies.`);
 }
 
 function renderSweepDistribution(distribution) {
@@ -1123,6 +1220,16 @@ function renderRejectionReport(payload) {
 }
 
 function zeroEligibleReason(payload) {
+  if (payload.time_group?.enabled) {
+    const report = payload.rejection_report || {};
+    const survivingRows = Number(report.base_rows || 0);
+    const candidateGroups = Number(report.base_combinations || 0);
+    const timeColumn = payload.time_group.time_column || "entry_start";
+    return `No fixed-parameter setup has ${payload.time_group.group_size} valid entry-time variants. ` +
+      `The detected time field is ${timeColumn} with ${number.format(payload.time_group.available_time_count || 0)} values. ` +
+      `${number.format(survivingRows)} rows have usable status, time, P&L, and drawdown values; ` +
+      `${number.format(candidateGroups)} fixed-parameter setups contain at least ${payload.time_group.group_size} variants.`;
+  }
   const diagnostics = payload.diagnostics || {};
   const baseCount = Number(diagnostics.base_count || 0);
   const windowCount = Number(diagnostics.base_with_window_variants || 0);
@@ -1165,11 +1272,19 @@ function runSummaryEntries(summary) {
   const mappingSummary = Object.entries(summary.column_mapping || {})
     .filter(([, source]) => source).map(([field, source]) => `${field} → ${source}`).join(" · ");
   const robustness = summary.entry_robustness || {};
+  const timeGroup = summary.time_group || {};
+  const timeDiversification = summary.time_diversification || {};
   return [
     ["Input", `${summary.input_file || "—"} · ${formatFileSize(summary.input_size_bytes)} · ${number.format(summary.input_rows || 0)} rows`],
     ["Timestamp (UTC)", summary.timestamp_utc || "—"],
     ["Filters", filterSummary],
     ["Ranking", rankingSummary],
+    ["Time group", timeGroup.enabled
+      ? `${timeGroup.group_size} distinct ${timeGroup.time_column || "entry_start"} values from ${timeGroup.available_time_count} available · every other parameter fixed · total P&L summed · member drawdowns summed as a conservative proxy`
+      : "Not used"],
+    ["Time diversification", timeDiversification.enabled
+      ? `Enabled · ${timeDiversification.years?.join(", ") || "—"} · weakest yearly percentile · profit required in every year`
+      : "Not used"],
     ["Column mapping", mappingSummary || "—"],
     ["Robustness rule", `${robustness.required ? "Required for inclusion" : "Shown as an annotation"} · ${Math.round((robustness.threshold_ratio || 0) * 100)}% of base P&L · all available variants within ±${robustness.window_minutes || "—"} minutes`],
   ];
@@ -1205,39 +1320,44 @@ async function copyRunSummary() {
 function renderRankedSweep(payload) {
   rankedSweepPayload = payload;
   const robustnessRequired = Boolean(payload.run_summary?.entry_robustness?.required);
+  const timeGrouped = Boolean(payload.time_group?.enabled);
+  const timeDiversified = Boolean(payload.time_diversification?.enabled);
   const parameterColumns = rankedParquetColumns(payload.rows || []);
   renderRankedSweepHeader(parameterColumns);
   $("rankedTableToolbar").hidden = !payload.rows?.length;
   const rankingDescription = (payload.ranking || []).map(criterion =>
     `${criterion.weight}% ${criterion.label} (${criterion.direction === "higher" ? "higher" : "lower"} is better)`
   ).join(" · ");
-  $("rankedSweepTitle").textContent = robustnessRequired ? "Top 20 robust combinations" : "Top 20 ranked combinations";
+  $("rankedSweepTitle").textContent = timeGrouped
+    ? "Top 20 time-diversified groups"
+    : timeDiversified ? "Top 20 time-diversified combinations"
+    : robustnessRequired ? "Top 20 robust combinations" : "Top 20 ranked combinations";
   $("rankedSweepSummary").textContent = payload.eligible_count
-    ? robustnessRequired
-      ? `${number.format(payload.eligible_count)} combinations passed all filters and required entry-time robustness. Score: ${rankingDescription}.`
-      : `${number.format(payload.eligible_count)} base combinations passed the selected filters and were ranked one by one. Robustness is shown as an annotation. Score: ${rankingDescription}.`
+    ? timeGrouped
+      ? `${number.format(payload.eligible_count)} fixed-parameter baskets had at least ${payload.time_group.group_size} distinct time variants. Every parameter is identical inside a basket except ${payload.time_group.time_column || "entry_start"}. Each basket contains its best ${payload.time_group.group_size} times from ${payload.time_group.available_time_count} available values. P&L is the sum of all 10 members; combined drawdown is the sum of their row-level drawdowns (a conservative proxy). Score: ${rankingDescription}.`
+      : timeDiversified
+      ? `${number.format(payload.eligible_count)} combinations were profitable in every mapped year (${payload.time_diversification.years.join(", ")}). The weakest yearly percentile drives diversification; drawdown controls risk. Score: ${rankingDescription}.`
+      : robustnessRequired
+        ? `${number.format(payload.eligible_count)} combinations passed all filters and required entry-time robustness. Score: ${rankingDescription}.`
+        : `${number.format(payload.eligible_count)} base combinations passed the selected filters and were ranked one by one. Robustness is shown as an annotation. Score: ${rankingDescription}.`
     : zeroEligibleReason(payload);
   const matchingRows = filteredRankedRows(payload.rows || []);
+  const fixedColumns = rankedFixedColumns();
   const rows = matchingRows.map(row => {
     const element = document.createElement("tr");
-    const values = [
-      row.rank,
-      number.format(row.final_score),
-      money.format(row.net_pnl),
-      money.format(row.pnl_2025),
-      money.format(row.pnl_2026),
-      formatYearlyDrawdown(row.drawdown_2025),
-      formatYearlyDrawdown(row.drawdown_2026),
-      money.format(row.ranking_drawdown),
-      robustnessLabel(row.entry_robustness, row.before_variant_count, row.after_variant_count),
-      row.entry_start,
-      cutoffValue(row),
-    ];
-    values.forEach((value, index) => {
+    fixedColumns.forEach(column => {
+      const rawValue = rankedFixedValue(row, column.key);
+      const value = column.key === "time_diversification_score"
+        ? rawValue == null ? "—" : `${(Number(rawValue) * 100).toFixed(1)}%`
+        : column.key === "entry_robustness"
+          ? robustnessLabel(rawValue, row.before_variant_count, row.after_variant_count)
+          : rawValue == null || rawValue === "" ? "—"
+            : column.money ? money.format(rawValue)
+              : column.numeric ? number.format(rawValue) : String(rawValue);
       const cell = document.createElement("td");
       cell.textContent = value;
-      if ([1, 2, 3, 4, 5, 6, 7].includes(index)) cell.className = "numeric";
-      if (index === 8) {
+      cell.className = column.className || "";
+      if (column.key === "entry_robustness") {
         cell.className = "robustness-cell";
         const badge = document.createElement("span");
         badge.className = `robustness-badge robustness-${row.entry_robustness}`;
@@ -1282,7 +1402,7 @@ function renderRankedSweep(payload) {
   if (!rows.length) {
     const empty = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 12 + parameterColumns.length;
+    cell.colSpan = fixedColumns.length + parameterColumns.length + 1;
     cell.className = "empty-table";
     cell.textContent = payload.rows?.length
       ? "No ranked combinations match the selected table filters."
@@ -1294,6 +1414,10 @@ function renderRankedSweep(payload) {
   closeStrategyDetail();
   renderRunSummary(payload.run_summary);
   renderSweepCharts(payload);
+  const robustnessLegend = document.querySelector(".robustness-legend");
+  if (robustnessLegend) robustnessLegend.hidden = timeGrouped;
+  const distributionFigure = $("sweepDistributionChart")?.closest("figure");
+  if (distributionFigure) distributionFigure.hidden = timeGrouped;
   ["exportRankedCsv", "exportRankedParquet", "exportRankedExcel"].forEach(id => {
     $(id).disabled = !payload.rows?.length;
   });
@@ -1339,20 +1463,33 @@ async function exportRankedSweep(exportFormat) {
 
 function setRankingProgress(value, label) {
   const meter = $("rankProgressMeter");
+  const loadingMeter = $("rankingLoadingMeter");
   $("rankProgress").hidden = false;
   $("rankProgressLabel").textContent = label;
-  if (value == null) meter.removeAttribute("value");
-  else meter.value = value;
+  $("rankingLoadingLabel").textContent = label;
+  [meter, loadingMeter].forEach(progress => {
+    if (value == null) progress.removeAttribute("value");
+    else progress.value = value;
+  });
+}
+
+function setRankingLoadingScreen(active) {
+  $("rankingLoadingScreen").hidden = !active;
+  $("parquetPanel").setAttribute("aria-busy", String(active));
+  document.body.classList.toggle("ranking-is-loading", active);
 }
 
 function startRankingProgress() {
   rankingStartedAt = performance.now();
   clearInterval(rankingElapsedTimer);
   $("rankProgressElapsed").textContent = "Elapsed 0s";
+  $("rankingLoadingElapsed").textContent = "Elapsed 0s";
+  setRankingLoadingScreen(true);
   setRankingProgress(0, "Preparing Parquet ranking…");
   rankingElapsedTimer = setInterval(() => {
     const seconds = Math.floor((performance.now() - rankingStartedAt) / 1000);
     $("rankProgressElapsed").textContent = `Elapsed ${seconds}s`;
+    $("rankingLoadingElapsed").textContent = `Elapsed ${seconds}s`;
   }, 250);
 }
 
@@ -1360,6 +1497,7 @@ function finishRankingProgress(value, label) {
   clearInterval(rankingElapsedTimer);
   const seconds = (performance.now() - rankingStartedAt) / 1000;
   $("rankProgressElapsed").textContent = `Elapsed ${seconds.toFixed(1)}s`;
+  $("rankingLoadingElapsed").textContent = `Elapsed ${seconds.toFixed(1)}s`;
   setRankingProgress(value, label);
   return seconds;
 }
@@ -1371,11 +1509,27 @@ async function rankSweep() {
     return;
   }
   const filters = readSweepFilters();
-  const ranking = readRankingCriteria();
-  if (!ranking) return;
+  const ranking = defaultRankingCriteria();
+  renderRankingBuilder(ranking);
+  const timeGroupRanking = true;
+  Object.assign(filters, {
+    status: "succeeded",
+    minimum_pnl: "",
+    maximum_pnl: "",
+    maximum_drawdown: "",
+    latest_entry: "",
+    minimum_trades: "",
+  });
+  const appliedColumnFilterCount = (filters.parameter_filters || []).reduce(
+    (count, filter) => count + (filter.values?.length || filter.ranges?.length || 1),
+    0,
+  );
   $("rankSweepButton").disabled = true;
   $("filterPreviewButton").disabled = true;
-  $("filterPreviewStatus").textContent = "Uploading and ranking the Parquet sweep…";
+  $("applyRankedColumnFilters").disabled = true;
+  $("filterPreviewStatus").textContent = appliedColumnFilterCount
+    ? `Applying ${appliedColumnFilterCount} strategy-column filter${appliedColumnFilterCount === 1 ? "" : "s"} and reranking complete 10-time groups…`
+    : "Uploading and ranking the Parquet sweep…";
   startRankingProgress();
   try {
     const payload = await new Promise((resolve, reject) => {
@@ -1388,6 +1542,7 @@ async function rankSweep() {
       request.setRequestHeader("X-Sweep-Mapping", JSON.stringify(schemaMapping()));
       request.setRequestHeader("X-Sweep-Filters", JSON.stringify(filters));
       request.setRequestHeader("X-Sweep-Ranking", JSON.stringify(ranking));
+      request.setRequestHeader("X-Sweep-Mode", "time-group");
       request.setRequestHeader("X-Sweep-Robustness", String($("requireEntryRobustness").checked));
       request.upload.addEventListener("progress", event => {
         if (!event.lengthComputable) return;
@@ -1395,7 +1550,9 @@ async function rankSweep() {
         setRankingProgress(Math.min(50, percentage / 2), `Uploading Parquet sweep: ${percentage}%`);
       });
       request.upload.addEventListener("load", () => {
-        setRankingProgress(null, $("requireEntryRobustness").checked
+        setRankingProgress(null, timeGroupRanking
+          ? "Upload complete. Server is selecting 10 time variants per setup and ranking the groups…"
+          : $("requireEntryRobustness").checked
           ? "Upload complete. Server is applying filters and requiring entry-time robustness…"
           : "Upload complete. Server is applying filters, ranking base combinations, and annotating robustness…");
       });
@@ -1409,14 +1566,19 @@ async function rankSweep() {
     });
     renderRankedSweep(payload);
     const elapsed = finishRankingProgress(100, "Ranking complete.");
-    const summary = `${number.format(payload.source_row_count || 0)} source rows scanned · ${number.format(payload.eligible_count)} eligible · ${number.format(payload.rows.length)} displayed · ${elapsed.toFixed(1)}s`;
+    const filterSummary = appliedColumnFilterCount
+      ? ` · ${number.format(appliedColumnFilterCount)} strategy-column filter${appliedColumnFilterCount === 1 ? "" : "s"} applied`
+      : "";
+    const summary = `${number.format(payload.source_row_count || 0)} source rows scanned · ${number.format(payload.eligible_count)} eligible · ${number.format(payload.rows.length)} displayed${filterSummary} · ${elapsed.toFixed(1)}s`;
     $("filterPreviewStatus").textContent = summary;
   } catch (error) {
     finishRankingProgress(0, "Ranking stopped before completion.");
     $("filterPreviewStatus").textContent = error.message;
   } finally {
+    setRankingLoadingScreen(false);
     $("rankSweepButton").disabled = false;
     $("filterPreviewButton").disabled = false;
+    $("applyRankedColumnFilters").disabled = false;
   }
 }
 
@@ -1430,15 +1592,23 @@ $("copyRunSummary").addEventListener("click", copyRunSummary);
 $("exportRankedCsv").addEventListener("click", () => exportRankedSweep("csv"));
 $("exportRankedParquet").addEventListener("click", () => exportRankedSweep("parquet"));
 $("exportRankedExcel").addEventListener("click", () => exportRankedSweep("xlsx"));
-$("applyRankedColumnFilters").addEventListener("click", () => {
+$("applyRankedColumnFilters").addEventListener("click", async () => {
   activeRankedDisplayFilters = readRankedDisplayFilters();
   renderParameterFilters(readRankedColumnFilters());
-  rankSweep();
+  await rankSweep();
 });
 $("addParameterFilter")?.addEventListener("click", () => {
   const drafts = readParameterFilterDrafts();
   drafts.push({});
   renderParameterFilters(drafts);
+});
+$("useTimeDiversification").addEventListener("click", () => {
+  renderRankingBuilder(defaultRankingCriteria());
+  activeParameterFilters = [];
+  activeRankedDisplayFilters = [];
+  $("filterLatestEntry").value = "";
+  $("requireEntryRobustness").checked = false;
+  validateSchemaMapping();
 });
 $("addRankingCriterion").addEventListener("click", () => {
   const criteria = [...document.querySelectorAll("[data-ranking-row]")].map(row => ({

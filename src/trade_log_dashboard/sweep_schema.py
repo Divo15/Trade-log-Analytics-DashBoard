@@ -6,6 +6,7 @@ from collections import Counter
 import csv
 from difflib import SequenceMatcher
 from io import BytesIO, StringIO
+import json
 from pathlib import Path
 import re
 import tempfile
@@ -20,12 +21,16 @@ FIELD_DEFINITIONS: tuple[dict[str, Any], ...] = (
      "aliases": ("status", "result_status", "run_status")},
     {"key": "net_pnl", "label": "Net P&L", "kind": "numeric", "required": True,
      "aliases": ("net_pnl", "total_pnl", "net_profit", "overall_profit", "strategy_pnl")},
+    {"key": "pnl_2024", "label": "2024 P&L", "kind": "numeric", "required": False,
+     "aliases": ("pnl_2024", "net_pnl_2024", "profit_2024", "year_2024_pnl")},
     {"key": "pnl_2025", "label": "2025 P&L", "kind": "numeric", "required": False,
      "aliases": ("pnl_2025", "net_pnl_2025", "profit_2025", "year_2025_pnl")},
     {"key": "pnl_2026", "label": "2026 P&L", "kind": "numeric", "required": False,
      "aliases": ("pnl_2026", "net_pnl_2026", "profit_2026", "year_2026_pnl")},
     {"key": "entry_start", "label": "Entry time", "kind": "time", "required": True,
      "aliases": ("entry_start", "entry_time", "entry", "start_time", "monitor_start")},
+    {"key": "mtm_dd_2024", "label": "2024 drawdown", "kind": "numeric", "required": False,
+     "aliases": ("mtm_dd_2024", "drawdown_2024", "max_drawdown_2024", "dd_2024")},
     {"key": "mtm_dd_2025", "label": "2025 drawdown", "kind": "numeric", "required": False,
      "aliases": ("mtm_dd_2025", "drawdown_2025", "max_drawdown_2025", "dd_2025")},
     {"key": "mtm_dd_2026", "label": "2026 drawdown", "kind": "numeric", "required": False,
@@ -45,9 +50,12 @@ _RESULT_COLUMN_NAMES = {
     "status", "win_rate", "worst_day_pnl", "max_consecutive_losses", "final_score", "rank",
     "max_loss", "entry_minutes", "prior_min", "after_min", "drawdown_risk", "max_loss_risk",
     "reentry_burden", "prior_robust_ratio", "after_robust_ratio", "robustness_ratio",
-    "entry_robust_side",
+    "entry_robust_side", "trade_win_rate", "roi_pct",
 }
-_RESULT_COLUMN_SUFFIXES = ("_count", "_pnl", "_roi", "_dd", "_drawdown", "_score")
+_RESULT_COLUMN_SUFFIXES = (
+    "_count", "_pnl", "_roi", "_dd", "_drawdown", "_score",
+    "_entries", "_exits", "_win_rate",
+)
 
 
 def _is_result_column(name: str) -> bool:
@@ -142,10 +150,25 @@ def _export_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for source in rows:
         row = {
             "rank": source.get("rank"), "final_score": source.get("final_score"),
-            "net_pnl": source.get("net_pnl"), "pnl_2025": source.get("pnl_2025"),
+            "time_diversification_score": source.get("time_diversification_score"),
+            "net_pnl": source.get("net_pnl"), "pnl_2024": source.get("pnl_2024"),
+            "pnl_2025": source.get("pnl_2025"),
             "pnl_2026": source.get("pnl_2026"), "ranking_drawdown": source.get("ranking_drawdown"),
+            "drawdown_2024": source.get("drawdown_2024"),
             "drawdown_2025": source.get("drawdown_2025"), "drawdown_2026": source.get("drawdown_2026"),
             "entry_start": source.get("entry_start"), "entry_robustness": source.get("entry_robustness"),
+            "time_member_count": source.get("time_member_count"),
+            "group_total_pnl": source.get("group_total_pnl"),
+            "group_average_pnl": source.get("group_average_pnl"),
+            "group_minimum_pnl": source.get("group_minimum_pnl"),
+            "group_combined_drawdown": source.get("group_combined_drawdown"),
+            "group_worst_drawdown": source.get("group_worst_drawdown"),
+            "group_average_drawdown": source.get("group_average_drawdown"),
+            "group_pnl_drawdown_ratio": source.get("group_pnl_drawdown_ratio"),
+            "selected_entry_times": ", ".join(
+                str(member.get("entry_start")) for member in (source.get("time_members") or [])
+            ),
+            "time_members_json": json.dumps(source.get("time_members") or [], default=str),
         }
         parameters = source.get("parameters") or {}
         parquet_fields = source.get("parquet_fields") or {}
@@ -422,10 +445,11 @@ def inspect_sweep_parquet(path: Path, *, include_filter_options: bool = True) ->
                            "message": f'{field["label"]} expects {field["kind"]} data; "{source}" is {by_name[source]["type"]}.'})
 
     mapping = {field["key"]: field["suggested_source"] for field in fields}
-    yearly_drawdown = bool(mapping["mtm_dd_2025"] and mapping["mtm_dd_2026"])
+    mapped_years = [year for year in (2024, 2025, 2026) if mapping[f"pnl_{year}"]]
+    yearly_drawdown = bool(mapped_years) and all(mapping[f"mtm_dd_{year}"] for year in mapped_years)
     if not mapping["mtm_drawdown"] and not yearly_drawdown:
         errors.append({"code": "missing_drawdown", "field": "drawdown",
-                       "message": "Map overall drawdown, or map both 2025 and 2026 drawdown."})
+                       "message": "Map overall drawdown, or map drawdown for every mapped P&L year."})
     if not mapping["completed_trade_count"]:
         warnings.append({"code": "optional_mapping", "field": "completed_trade_count",
                          "message": "Completed trades is not mapped; trade-count filtering will be unavailable."})
@@ -485,12 +509,17 @@ def preview_sweep_filters(
     status_column = source_for("status", required=True)
     pnl_column = source_for("net_pnl", required=True)
     entry_column = source_for("entry_start", required=True)
-    yearly_2025 = source_for("mtm_dd_2025")
-    yearly_2026 = source_for("mtm_dd_2026")
+    yearly_pnls = {
+        year: source_for(f"pnl_{year}") for year in (2024, 2025, 2026)
+    }
+    yearly_drawdowns = {
+        year: source_for(f"mtm_dd_{year}") for year in (2024, 2025, 2026)
+    }
+    mapped_years = [year for year, source in yearly_pnls.items() if source]
     overall_drawdown = source_for("mtm_drawdown")
     trade_count = source_for("completed_trade_count")
-    if not overall_drawdown and not (yearly_2025 and yearly_2026):
-        raise ValueError("Map overall drawdown, or map both 2025 and 2026 drawdown before filtering.")
+    if not overall_drawdown and any(not yearly_drawdowns[year] for year in mapped_years):
+        raise ValueError("Map overall drawdown, or map drawdown for every mapped P&L year before filtering.")
 
     clauses: list[str] = []
     values: list[Any] = [str(path)]
@@ -529,10 +558,10 @@ def preview_sweep_filters(
         if overall_drawdown:
             drawdown_expression = f"abs(CAST({identifier(overall_drawdown)} AS DOUBLE))"
         else:
-            drawdown_expression = (
-                f"greatest(abs(CAST({identifier(yearly_2025)} AS DOUBLE)), "
-                f"abs(CAST({identifier(yearly_2026)} AS DOUBLE)))"
-            )
+            drawdown_expression = "greatest(" + ", ".join(
+                f"abs(CAST({identifier(yearly_drawdowns[year])} AS DOUBLE))"
+                for year in mapped_years
+            ) + ")"
         clauses.append(drawdown_expression + " <= ?")
         values.append(maximum_drawdown)
 
@@ -612,28 +641,40 @@ def rank_sweep_parquet(
 
     status = source_for("status", required=True)
     net_pnl = source_for("net_pnl", required=True)
+    pnl_2024 = source_for("pnl_2024")
     pnl_2025 = source_for("pnl_2025")
     pnl_2026 = source_for("pnl_2026")
     entry = source_for("entry_start", required=True)
+    dd_2024 = source_for("mtm_dd_2024")
     dd_2025 = source_for("mtm_dd_2025")
     dd_2026 = source_for("mtm_dd_2026")
     overall_dd = source_for("mtm_drawdown")
     trade_count = source_for("completed_trade_count")
-    if not pnl_2025 and not pnl_2026:
+    yearly_pnl_sources = [
+        (year, source)
+        for year, source in ((2024, pnl_2024), (2025, pnl_2025), (2026, pnl_2026))
+        if source
+    ]
+    yearly_dd_sources = {
+        year: source
+        for year, source in ((2024, dd_2024), (2025, dd_2025), (2026, dd_2026))
+        if source
+    }
+    if not yearly_pnl_sources:
         raise ValueError("Map at least one yearly P&L column before ranking.")
-    if not overall_dd and not (dd_2025 and dd_2026):
-        raise ValueError("Map overall drawdown, or map both 2025 and 2026 drawdown before ranking.")
+    if not overall_dd and any(year not in yearly_dd_sources for year, _source in yearly_pnl_sources):
+        raise ValueError("Map overall drawdown, or map drawdown for every mapped P&L year before ranking.")
 
     if ranking is not None:
         raw_criteria = ranking
-    elif pnl_2025 and pnl_2026:
+    elif len(yearly_pnl_sources) >= 2:
         raw_criteria = [
-            {"column": pnl_2025, "weight": 30, "direction": "higher", "label": "2025 P&L"},
-            {"column": pnl_2026, "weight": 30, "direction": "higher", "label": "2026 P&L"},
-            {"column": "__ranking_drawdown", "weight": 40, "direction": "lower", "label": "Ranking drawdown"},
+            {"column": "__time_diversification", "weight": 70, "direction": "higher",
+             "label": "Time diversification (weakest-year percentile)"},
+            {"column": "__ranking_drawdown", "weight": 30, "direction": "lower", "label": "Ranking drawdown"},
         ]
     else:
-        yearly_pnl = pnl_2025 or pnl_2026
+        yearly_pnl = yearly_pnl_sources[0][1]
         raw_criteria = [
             {"column": yearly_pnl, "weight": 60, "direction": "higher", "label": "Yearly P&L"},
             {"column": "__ranking_drawdown", "weight": 40, "direction": "lower", "label": "Ranking drawdown"},
@@ -659,6 +700,13 @@ def rank_sweep_parquet(
         used_criteria.add(column)
         if column == "__ranking_drawdown":
             source, label = "ranking_drawdown", "Ranking drawdown"
+        elif column == "__time_diversification":
+            if len(yearly_pnl_sources) < 2:
+                raise ValueError("Time diversification needs at least two mapped yearly P&L columns.")
+            if direction != "higher":
+                raise ValueError("Higher must be better for the time-diversification criterion.")
+            source = "time_diversification_score"
+            label = "Time diversification (weakest-year percentile)"
         elif column in columns and columns[column]["category"] == "numeric":
             source, label = column, str(criterion.get("label") or column)
         else:
@@ -691,7 +739,8 @@ def rank_sweep_parquet(
     ]
     fixed_display_sources = {
         source
-        for source in (net_pnl, pnl_2025, pnl_2026, dd_2025, dd_2026, overall_dd, entry)
+        for source in (net_pnl, pnl_2024, pnl_2025, pnl_2026,
+                       dd_2024, dd_2025, dd_2026, overall_dd, entry)
         if source
     }
     parquet_field_columns = [
@@ -734,27 +783,39 @@ def rank_sweep_parquet(
     if overall_dd:
         drawdown_expression = f"abs(CAST({identifier(overall_dd)} AS DOUBLE))"
     else:
-        drawdown_expression = f"greatest(abs(CAST({identifier(dd_2025)} AS DOUBLE)), abs(CAST({identifier(dd_2026)} AS DOUBLE)))"
+        yearly_drawdowns = [
+            f"abs(CAST({identifier(yearly_dd_sources[year])} AS DOUBLE))"
+            for year, _source in yearly_pnl_sources
+        ]
+        drawdown_expression = f"greatest({', '.join(yearly_drawdowns)})"
     parameter_key = "hash(" + ", ".join(identifier(column) for column in robustness_key_columns) + ")"
     parameter_select = ", ".join(f"any_value({identifier(column)}) AS {identifier(column)}" for column in parameter_columns)
     output_parameters = ", ".join(identifier(column) for column in parameter_columns)
     custom_metric_select = ", ".join(
         f"any_value(CAST({identifier(item['source'])} AS DOUBLE)) AS custom_metric_{item['index']}"
-        for item in criteria if item["source"] != "ranking_drawdown"
+        for item in criteria if item["source"] not in {"ranking_drawdown", "time_diversification_score"}
     )
     custom_metric_sql = ", " + custom_metric_select if custom_metric_select else ""
+    time_diversification_enabled = any(
+        item["source"] == "time_diversification_score" for item in criteria
+    )
+
+    def criterion_metric(item: dict[str, Any]) -> str:
+        if item["source"] in {"ranking_drawdown", "time_diversification_score"}:
+            return item["source"]
+        return f"custom_metric_{item['index']}"
 
     base_clauses = [
         f"lower(CAST({identifier(status)} AS VARCHAR)) = 'succeeded'",
         f"CAST({identifier(net_pnl)} AS DOUBLE) > 0",
         drawdown_expression + " IS NOT NULL",
     ]
-    if pnl_2025:
-        base_clauses.append(f"CAST({identifier(pnl_2025)} AS DOUBLE) IS NOT NULL")
-    if pnl_2026:
-        base_clauses.append(f"CAST({identifier(pnl_2026)} AS DOUBLE) IS NOT NULL")
+    for _year, yearly_pnl in yearly_pnl_sources:
+        base_clauses.append(f"CAST({identifier(yearly_pnl)} AS DOUBLE) IS NOT NULL")
+        if time_diversification_enabled:
+            base_clauses.append(f"CAST({identifier(yearly_pnl)} AS DOUBLE) > 0")
     for item in criteria:
-        if item["source"] != "ranking_drawdown":
+        if item["source"] not in {"ranking_drawdown", "time_diversification_score"}:
             base_clauses.append(f"CAST({identifier(item['source'])} AS DOUBLE) IS NOT NULL")
     values: list[Any] = [str(path)]
     if selected_status:
@@ -792,19 +853,29 @@ def rank_sweep_parquet(
 
     score_selects, weighted_scores = [], []
     for item in criteria:
-        metric = "ranking_drawdown" if item["source"] == "ranking_drawdown" else f"custom_metric_{item['index']}"
-        percentile = f"percent_rank() OVER (ORDER BY {metric})"
-        score = percentile if item["direction"] == "higher" else f"1 - ({percentile})"
+        metric = criterion_metric(item)
+        if item["source"] == "time_diversification_score":
+            score = metric
+        else:
+            percentile = f"percent_rank() OVER (ORDER BY {metric})"
+            score = percentile if item["direction"] == "higher" else f"1 - ({percentile})"
         score_selects.append(f"{score} AS criterion_score_{item['index']}")
         weighted_scores.append(f"{item['weight'] / 100.0} * criterion_score_{item['index']}")
     final_score_expression = " + ".join(weighted_scores)
     component_selects = []
     for item in criteria:
-        metric = "ranking_drawdown" if item["source"] == "ranking_drawdown" else f"custom_metric_{item['index']}"
+        metric = criterion_metric(item)
         component_selects.append(
             f"{metric} AS criterion_value_{item['index']}, criterion_score_{item['index']}"
         )
     component_select = ", ".join(component_selects)
+    time_diversification_expression = (
+        "least(" + ", ".join(
+            f"percent_rank() OVER (ORDER BY pnl_{year})"
+            for year, _source in yearly_pnl_sources
+        ) + ")"
+        if time_diversification_enabled else "NULL::DOUBLE"
+    )
 
     robustness_filter = "WHERE before_pass OR after_pass" if require_robustness else ""
     query = f"""
@@ -826,8 +897,10 @@ def rank_sweep_parquet(
           SELECT parameter_key, entry_minutes,
                  any_value(CAST({identifier(entry)} AS VARCHAR)) AS entry_start,
                  max(CAST({identifier(net_pnl)} AS DOUBLE)) AS net_pnl,
+                 {f'any_value(CAST({identifier(pnl_2024)} AS DOUBLE))' if pnl_2024 else 'NULL::DOUBLE'} AS pnl_2024,
                  {f'any_value(CAST({identifier(pnl_2025)} AS DOUBLE))' if pnl_2025 else 'NULL::DOUBLE'} AS pnl_2025,
                  {f'any_value(CAST({identifier(pnl_2026)} AS DOUBLE))' if pnl_2026 else 'NULL::DOUBLE'} AS pnl_2026,
+                 {f'any_value(abs(CAST({identifier(dd_2024)} AS DOUBLE)))' if dd_2024 else 'NULL::DOUBLE'} AS drawdown_2024,
                  {f'any_value(abs(CAST({identifier(dd_2025)} AS DOUBLE)))' if dd_2025 else 'NULL::DOUBLE'} AS drawdown_2025,
                  {f'any_value(abs(CAST({identifier(dd_2026)} AS DOUBLE)))' if dd_2026 else 'NULL::DOUBLE'} AS drawdown_2026,
                  any_value(ranking_drawdown) AS ranking_drawdown,
@@ -865,10 +938,14 @@ def rank_sweep_parquet(
             FROM robustness
            {robustness_filter}
         ),
+        time_profiled AS (
+          SELECT *, {time_diversification_expression} AS time_diversification_score
+            FROM eligible
+        ),
         scored AS (
           SELECT *,
                  {', '.join(score_selects)}
-            FROM eligible
+            FROM time_profiled
         ),
         score_values AS (
           SELECT *, {final_score_expression} AS final_score
@@ -890,7 +967,10 @@ def rank_sweep_parquet(
         )
         SELECT row_number() OVER (ORDER BY final_score DESC, net_pnl DESC, ranking_drawdown ASC,
                                   parameter_key ASC, entry_minutes ASC) AS rank,
-               parameter_key, final_score, net_pnl, pnl_2025, pnl_2026, drawdown_2025, drawdown_2026, ranking_drawdown, entry_start, entry_robustness, before_variant_count, after_variant_count,
+               parameter_key, final_score, time_diversification_score,
+               net_pnl, pnl_2024, pnl_2025, pnl_2026,
+               drawdown_2024, drawdown_2025, drawdown_2026,
+               ranking_drawdown, entry_start, entry_robustness, before_variant_count, after_variant_count,
                eligible_count, before_count, after_count, both_count, not_confirmed_count, {component_select}, {output_parameters}
           FROM top_rows CROSS JOIN distribution
          ORDER BY rank
@@ -1066,9 +1146,399 @@ def rank_sweep_parquet(
         "eligible_count": int(rows[0]["eligible_count"]) if rows else 0,
         "top_n": top_n,
         "ranking": [{key: item[key] for key in ("column", "label", "weight", "direction")} for item in criteria],
+        "time_diversification": {
+            "enabled": time_diversification_enabled,
+            "years": [year for year, _source in yearly_pnl_sources],
+            "method": "weakest_year_percentile",
+            "requires_positive_each_year": time_diversification_enabled,
+        },
         "robustness_required": require_robustness,
         "robustness_distribution": distribution,
         "diagnostics": diagnostics if not rows else {},
+        "rows": result_rows,
+    }
+
+
+def rank_sweep_time_groups(
+    path: Path,
+    mapping: dict[str, str],
+    filters: dict[str, Any],
+    *,
+    group_size: int = 10,
+    top_n: int = 20,
+    ranking: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Rank 10-member baskets with fixed parameters and one changing time field."""
+    if not 2 <= group_size <= 50:
+        raise ValueError("Time-group size must be between 2 and 50.")
+    if not 1 <= top_n <= 100:
+        raise ValueError("Top-N must be between 1 and 100.")
+
+    report = inspect_sweep_parquet(path, include_filter_options=False)
+    columns = {column["name"]: column for column in report["columns"]}
+    fields = {field["key"]: field for field in report["fields"]}
+
+    def source_for(key: str, *, required: bool = False) -> str | None:
+        source = mapping.get(key)
+        if not source:
+            if required:
+                raise ValueError(f"Map a Parquet column to {fields[key]['label']} before ranking time groups.")
+            return None
+        if source not in columns or not _compatible(fields[key]["kind"], columns[source]["category"]):
+            raise ValueError(f"The mapping for {fields[key]['label']} is invalid.")
+        return source
+
+    def identifier(name: str) -> str:
+        return '"' + name.replace('"', '""') + '"'
+
+    def number(value: Any, label: str) -> float | None:
+        if value in (None, ""):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{label} must be a number.") from exc
+
+    status = source_for("status", required=True)
+    net_pnl = source_for("net_pnl", required=True)
+    entry = source_for("entry_start", required=True)
+    pnl_sources = {year: source_for(f"pnl_{year}") for year in (2024, 2025, 2026)}
+    dd_sources = {year: source_for(f"mtm_dd_{year}") for year in (2024, 2025, 2026)}
+    overall_dd = source_for("mtm_drawdown")
+    trade_count = source_for("completed_trade_count")
+    mapped_years = [year for year, source in pnl_sources.items() if source]
+    if not overall_dd and any(not dd_sources[year] for year in mapped_years):
+        raise ValueError("Map overall drawdown, or map drawdown for every mapped P&L year before ranking time groups.")
+
+    raw_criteria = ranking or [
+        {"column": "__time_group_pnl", "weight": 60, "direction": "higher"},
+        {"column": "__time_group_drawdown", "weight": 40, "direction": "lower"},
+    ]
+    if not isinstance(raw_criteria, list) or len(raw_criteria) != 2:
+        raise ValueError("Time-group ranking requires total P&L and combined drawdown criteria.")
+    expected = {
+        "__time_group_pnl": ("Group total P&L", "higher"),
+        "__time_group_drawdown": ("Group combined drawdown", "lower"),
+    }
+    criteria: list[dict[str, Any]] = []
+    for criterion in raw_criteria:
+        if not isinstance(criterion, dict):
+            raise ValueError("Each time-group ranking criterion must be an object.")
+        column = str(criterion.get("column", ""))
+        if column not in expected:
+            raise ValueError("Time groups must be ranked by group total P&L and group combined drawdown.")
+        label, required_direction = expected[column]
+        direction = criterion.get("direction")
+        if direction != required_direction:
+            raise ValueError(f'{label} must use the "{required_direction}" direction.')
+        weight = number(criterion.get("weight"), f"{label} weight")
+        if weight is None or weight <= 0:
+            raise ValueError("Every time-group ranking weight must be greater than zero.")
+        criteria.append({"column": column, "label": label, "weight": weight, "direction": direction})
+    if {item["column"] for item in criteria} != set(expected):
+        raise ValueError("Use each time-group ranking criterion exactly once.")
+    if abs(sum(item["weight"] for item in criteria) - 100) > 0.001:
+        raise ValueError("Time-group ranking weights must total 100%.")
+    pnl_weight = next(item["weight"] for item in criteria if item["column"] == "__time_group_pnl") / 100.0
+    drawdown_weight = next(
+        item["weight"] for item in criteria if item["column"] == "__time_group_drawdown"
+    ) / 100.0
+
+    mapped_sources = {source for source in mapping.values() if source}
+    parameter_columns = [
+        column["name"] for column in report["columns"]
+        if column["name"] not in mapped_sources and not _is_result_column(column["name"])
+    ]
+    group_key_columns = list(parameter_columns)
+    if not group_key_columns:
+        raise ValueError("No fixed strategy-parameter columns were detected for time grouping.")
+
+    entry_expression = (
+        f"CAST({identifier(entry)} AS DOUBLE)"
+        if columns[entry]["category"] == "numeric"
+        else f"extract(hour FROM TRY_CAST(CAST({identifier(entry)} AS VARCHAR) AS TIME)) * 60 + extract(minute FROM TRY_CAST(CAST({identifier(entry)} AS VARCHAR) AS TIME))"
+    )
+    if overall_dd:
+        drawdown_expression = f"abs(CAST({identifier(overall_dd)} AS DOUBLE))"
+    else:
+        drawdown_expression = "greatest(" + ", ".join(
+            f"abs(CAST({identifier(dd_sources[year])} AS DOUBLE))" for year in mapped_years
+        ) + ")"
+    group_partition = ", ".join(identifier(column) for column in group_key_columns)
+    parameter_select = ", ".join(identifier(column) for column in parameter_columns)
+    output_parameters = ", ".join(identifier(column) for column in parameter_columns)
+
+    minimum_pnl = number(filters.get("minimum_pnl"), "Minimum P&L")
+    maximum_pnl = number(filters.get("maximum_pnl"), "Maximum P&L")
+    maximum_drawdown = number(filters.get("maximum_drawdown"), "Maximum drawdown")
+    minimum_trades = number(filters.get("minimum_trades"), "Minimum trade count")
+    selected_status = str(filters.get("status", "")).strip()
+    latest_entry = str(filters.get("latest_entry", "")).strip()
+    if minimum_pnl is not None and maximum_pnl is not None and maximum_pnl <= minimum_pnl:
+        raise ValueError("Maximum P&L must be greater than minimum P&L.")
+    if maximum_drawdown is not None and maximum_drawdown < 0:
+        raise ValueError("Maximum drawdown must be zero or greater.")
+    if minimum_trades is not None and (minimum_trades < 0 or not minimum_trades.is_integer()):
+        raise ValueError("Minimum trade count must be a whole number greater than or equal to zero.")
+    if minimum_trades is not None and not trade_count:
+        raise ValueError("Map a completed-trades column before applying a trade-count filter.")
+    if latest_entry and not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", latest_entry):
+        raise ValueError("Latest entry time must use HH:MM in 24-hour time.")
+
+    clauses = [
+        f"lower(CAST({identifier(status)} AS VARCHAR)) = 'succeeded'",
+        f"CAST({identifier(net_pnl)} AS DOUBLE) IS NOT NULL",
+        f"{entry_expression} IS NOT NULL",
+        drawdown_expression + " IS NOT NULL",
+    ]
+    values: list[Any] = [str(path)]
+    if selected_status:
+        clauses.append(f"lower(CAST({identifier(status)} AS VARCHAR)) = lower(?)")
+        values.append(selected_status)
+    if minimum_pnl is not None:
+        clauses.append(f"CAST({identifier(net_pnl)} AS DOUBLE) > ?")
+        values.append(minimum_pnl)
+    if maximum_pnl is not None:
+        clauses.append(f"CAST({identifier(net_pnl)} AS DOUBLE) <= ?")
+        values.append(maximum_pnl)
+    if latest_entry:
+        hour, minute = (int(part) for part in latest_entry.split(":"))
+        clauses.append(f"{entry_expression} <= ?")
+        values.append(hour * 60 + minute)
+    if maximum_drawdown is not None:
+        clauses.append(drawdown_expression + " <= ?")
+        values.append(maximum_drawdown)
+    if minimum_trades is not None:
+        clauses.append(f"CAST({identifier(trade_count)} AS DOUBLE) >= ?")
+        values.append(minimum_trades)
+    parameter_clauses, parameter_values = _parameter_filter_clauses(
+        filters.get("parameter_filters"), columns, identifier
+    )
+    clauses.extend(parameter_clauses)
+    values.extend(parameter_values)
+
+    yearly_select = ", ".join(
+        f"CAST({identifier(pnl_sources[year])} AS DOUBLE) AS pnl_{year}"
+        if pnl_sources[year] else f"NULL::DOUBLE AS pnl_{year}"
+        for year in (2024, 2025, 2026)
+    )
+    yearly_dd_select = ", ".join(
+        f"abs(CAST({identifier(dd_sources[year])} AS DOUBLE)) AS drawdown_{year}"
+        if dd_sources[year] else f"NULL::DOUBLE AS drawdown_{year}"
+        for year in (2024, 2025, 2026)
+    )
+    group_yearly_select = ", ".join(
+        f"sum(pnl_{year}) AS pnl_{year}, sum(drawdown_{year}) AS drawdown_{year}"
+        for year in (2024, 2025, 2026)
+    )
+    member_struct = "struct_pack(" + ", ".join([
+        "entry_start := entry_start",
+        "net_pnl := net_pnl",
+        "ranking_drawdown := ranking_drawdown",
+        "selection_contribution := selection_contribution",
+        *(f"pnl_{year} := pnl_{year}" for year in (2024, 2025, 2026)),
+        *(f"drawdown_{year} := drawdown_{year}" for year in (2024, 2025, 2026)),
+    ]) + ")"
+    tie_break = ", ".join(f"{identifier(column)} ASC" for column in group_key_columns)
+    query = f"""
+        WITH source AS (
+          SELECT *, {entry_expression} AS entry_minutes,
+                 {drawdown_expression} AS ranking_drawdown
+            FROM read_parquet(?)
+        ),
+        eligible_members AS (
+          SELECT entry_minutes,
+                 CAST({identifier(entry)} AS VARCHAR) AS entry_start,
+                 CAST({identifier(net_pnl)} AS DOUBLE) AS net_pnl,
+                 ranking_drawdown,
+                 {yearly_select}, {yearly_dd_select},
+                 {', '.join(identifier(column) for column in parameter_columns)}
+            FROM source
+           WHERE {' AND '.join(clauses)}
+        ),
+        distinct_time_members AS (
+          SELECT * EXCLUDE (time_duplicate_rank)
+            FROM (
+              SELECT *, row_number() OVER (
+                         PARTITION BY {group_partition}, entry_minutes
+                         ORDER BY net_pnl DESC, ranking_drawdown ASC
+                     ) AS time_duplicate_rank
+                FROM eligible_members
+            )
+           WHERE time_duplicate_rank = 1
+        ),
+        member_percentiles AS (
+          SELECT *,
+                 percent_rank() OVER (ORDER BY net_pnl) AS member_pnl_score,
+                 1 - percent_rank() OVER (ORDER BY ranking_drawdown) AS member_drawdown_score
+            FROM distinct_time_members
+        ),
+        member_contributions AS (
+          SELECT *,
+                 {pnl_weight} * member_pnl_score + {drawdown_weight} * member_drawdown_score
+                   AS selection_contribution
+            FROM member_percentiles
+        ),
+        picked_members AS (
+          SELECT *, row_number() OVER (
+                     PARTITION BY {group_partition}
+                     ORDER BY selection_contribution DESC, net_pnl DESC,
+                              ranking_drawdown ASC, entry_minutes ASC
+                 ) AS member_rank
+            FROM member_contributions
+        ),
+        complete_groups AS (
+          SELECT count(*) AS time_member_count,
+                 sum(net_pnl) AS group_total_pnl,
+                 avg(net_pnl) AS group_average_pnl,
+                 min(net_pnl) AS group_minimum_pnl,
+                 sum(ranking_drawdown) AS group_combined_drawdown,
+                 max(ranking_drawdown) AS group_worst_drawdown,
+                 avg(ranking_drawdown) AS group_average_drawdown,
+                 {group_yearly_select},
+                 list({member_struct} ORDER BY entry_minutes) AS time_members,
+                 {parameter_select}
+            FROM picked_members
+           WHERE member_rank <= {int(group_size)}
+           GROUP BY {group_partition}
+          HAVING count(*) = {int(group_size)}
+             AND count(DISTINCT entry_minutes) = {int(group_size)}
+        ),
+        group_percentiles AS (
+          SELECT *,
+                 percent_rank() OVER (ORDER BY group_total_pnl) AS group_pnl_score,
+                 1 - percent_rank() OVER (ORDER BY group_combined_drawdown) AS group_drawdown_score
+            FROM complete_groups
+        ),
+        scored_groups AS (
+          SELECT *,
+                 {pnl_weight} * group_pnl_score + {drawdown_weight} * group_drawdown_score AS final_score
+            FROM group_percentiles
+        ),
+        summary AS (
+          SELECT count(*) AS eligible_count FROM scored_groups
+        ),
+        top_groups AS (
+          SELECT * FROM scored_groups
+           ORDER BY final_score DESC, group_total_pnl DESC, group_combined_drawdown ASC, {tie_break}
+           LIMIT {int(top_n)}
+        )
+        SELECT row_number() OVER (
+                   ORDER BY final_score DESC, group_total_pnl DESC, group_combined_drawdown ASC, {tie_break}
+               ) AS rank,
+               final_score, group_total_pnl AS net_pnl,
+               group_total_pnl, group_average_pnl, group_minimum_pnl,
+               group_combined_drawdown AS ranking_drawdown,
+               group_combined_drawdown, group_worst_drawdown, group_average_drawdown,
+               CASE WHEN group_combined_drawdown > 0
+                    THEN group_total_pnl / group_combined_drawdown END AS group_pnl_drawdown_ratio,
+               NULL::DOUBLE AS time_diversification_score,
+               pnl_2024, pnl_2025, pnl_2026,
+               drawdown_2024, drawdown_2025, drawdown_2026,
+               time_member_count, time_members,
+               group_pnl_score, group_drawdown_score,
+               summary.eligible_count,
+               {output_parameters}
+          FROM top_groups CROSS JOIN summary
+         ORDER BY rank
+    """
+
+    audit_query = f"""
+        WITH source AS (
+          SELECT *, {entry_expression} AS entry_minutes,
+                 {drawdown_expression} AS ranking_drawdown
+            FROM read_parquet(?)
+        ),
+        eligible_members AS (
+          SELECT {group_partition}, entry_minutes
+            FROM source WHERE {' AND '.join(clauses)}
+        ),
+        base AS (
+          SELECT {group_partition} FROM eligible_members
+           GROUP BY {group_partition}
+          HAVING count(DISTINCT entry_minutes) >= {int(group_size)}
+        ),
+        eligible AS (SELECT * FROM base)
+        SELECT count(*) FROM eligible
+    """
+    connection = duckdb.connect()
+    try:
+        available_time_count = int(connection.execute(
+            f"SELECT count(DISTINCT CAST({identifier(entry)} AS VARCHAR)) FROM read_parquet(?)",
+            [str(path)],
+        ).fetchone()[0])
+        cursor = connection.execute(query, values)
+        headers = [item[0] for item in cursor.description]
+        rows = [dict(zip(headers, row)) for row in cursor.fetchall()]
+        rejection_report = build_rejection_report(
+            connection, path, clauses, values, entry_expression,
+            drawdown_expression, audit_query, False,
+        )
+    except duckdb.Error as exc:
+        raise ValueError(f"The sweep time groups could not be ranked: {exc}") from exc
+    finally:
+        connection.close()
+
+    eligible_count = int(rows[0]["eligible_count"]) if rows else 0
+    result_rows = []
+    for row in rows:
+        parameters = {column: row.pop(column) for column in parameter_columns}
+        members = [dict(member) for member in row.pop("time_members")]
+        pnl_score = row.pop("group_pnl_score")
+        drawdown_score = row.pop("group_drawdown_score")
+        row.pop("eligible_count")
+        row["entry_start"] = f"{group_size} selected times"
+        row["entry_robustness"] = "time_group"
+        row["before_variant_count"] = 0
+        row["after_variant_count"] = 0
+        result_rows.append({
+            **row,
+            "time_members": members,
+            "parameters": parameters,
+            "parquet_fields": dict(parameters),
+            "ranking_components": [
+                {
+                    "column": "__time_group_pnl", "label": "Group total P&L",
+                    "direction": "higher", "weight": pnl_weight * 100,
+                    "value": row["group_total_pnl"], "percentile_score": pnl_score,
+                    "weighted_contribution": pnl_score * pnl_weight,
+                },
+                {
+                    "column": "__time_group_drawdown", "label": "Group combined drawdown",
+                    "direction": "lower", "weight": drawdown_weight * 100,
+                    "value": row["group_combined_drawdown"], "percentile_score": drawdown_score,
+                    "weighted_contribution": drawdown_score * drawdown_weight,
+                },
+            ],
+        })
+
+    return {
+        "source_row_count": report["file"]["row_count"],
+        "rejection_report": rejection_report,
+        "eligible_count": eligible_count,
+        "top_n": top_n,
+        "ranking": criteria,
+        "time_group": {
+            "enabled": True,
+            "group_size": group_size,
+            "available_time_count": available_time_count,
+            "time_column": entry,
+            "selection_method": "best_10_by_combined_contribution",
+            "pnl_aggregation": "sum",
+            "drawdown_aggregation": "sum_of_member_drawdowns_proxy",
+            "fixed_parameters_enforced": True,
+            "distinct_time_values_required": True,
+            "requires_positive_members": False,
+        },
+        "time_diversification": {
+            "enabled": False,
+            "years": mapped_years,
+            "method": None,
+            "requires_positive_each_year": False,
+        },
+        "robustness_required": False,
+        "robustness_distribution": {},
+        "diagnostics": {} if rows else {"available_time_count": available_time_count},
         "rows": result_rows,
     }
 
