@@ -567,7 +567,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "time_group": result.get("time_group", {"enabled": False}),
                     "time_diversification": result["time_diversification"],
                     "entry_robustness": {
-                        "threshold_ratio": 0.70,
+                        "threshold_ratio": 0.60,
+                        "pass_rule": "any_one_variant_on_either_side",
+                        "offset_minutes": [-20,-18,-16,-14,-12,-10,-8,-6,-4,-2,2,4,6,8,10,12,14,16,18,20],
                         "window_minutes": 20,
                         "required": effective_robustness,
                         "mode": "strict_filter" if effective_robustness else "annotation_only",

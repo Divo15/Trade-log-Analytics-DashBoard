@@ -1245,7 +1245,7 @@ function zeroEligibleReason(payload) {
     return `${number.format(baseCount)} rows passed the base filters, but none had same-parameter entry variants within ±${windowMinutes} minutes. ${nearest}`;
   }
   if (!passCount) {
-    return `${number.format(baseCount)} rows passed the base filters and ${number.format(windowCount)} had nearby variants, but none retained at least 70% of base P&L on a full before or after side.`;
+    return `${number.format(baseCount)} rows passed the base filters and ${number.format(windowCount)} had nearby variants, but no tested variant retained at least 60% of base P&L at an offset of ±2, ±4, …, ±20 minutes.`;
   }
   return "No combination passed the selected filters and available entry-time robustness checks.";
 }

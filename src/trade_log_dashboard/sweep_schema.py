@@ -913,12 +913,13 @@ def rank_sweep_parquet(
           SELECT b.*,
                  count(variant.entry_minutes) FILTER (WHERE variant.entry_minutes < b.entry_minutes) AS before_variant_count,
                  count(variant.entry_minutes) FILTER (WHERE variant.entry_minutes > b.entry_minutes) AS after_variant_count,
-                 bool_and(coalesce(variant.shifted_pnl >= 0.70 * b.net_pnl, false))
+                 bool_or(coalesce(variant.shifted_pnl >= 0.60 * b.net_pnl, false))
                    FILTER (WHERE variant.entry_minutes < b.entry_minutes) AS before_all_pass,
-                 bool_and(coalesce(variant.shifted_pnl >= 0.70 * b.net_pnl, false))
+                 bool_or(coalesce(variant.shifted_pnl >= 0.60 * b.net_pnl, false))
                    FILTER (WHERE variant.entry_minutes > b.entry_minutes) AS after_all_pass
             FROM base b
             LEFT JOIN time_pnl variant ON variant.parameter_key = b.parameter_key
+                                  AND abs(variant.entry_minutes - b.entry_minutes) IN (2,4,6,8,10,12,14,16,18,20)
                                   AND variant.entry_minutes <> b.entry_minutes
                                   AND variant.entry_minutes BETWEEN b.entry_minutes - {robustness_window_minutes}
                                                                AND b.entry_minutes + {robustness_window_minutes}
@@ -1051,12 +1052,13 @@ def rank_sweep_parquet(
                   SELECT b.*,
                          count(variant.entry_minutes) FILTER (WHERE variant.entry_minutes < b.entry_minutes) AS before_variant_count,
                          count(variant.entry_minutes) FILTER (WHERE variant.entry_minutes > b.entry_minutes) AS after_variant_count,
-                         bool_and(coalesce(variant.shifted_pnl >= 0.70 * b.net_pnl, false))
+                         bool_or(coalesce(variant.shifted_pnl >= 0.60 * b.net_pnl, false))
                            FILTER (WHERE variant.entry_minutes < b.entry_minutes) AS before_all_pass,
-                         bool_and(coalesce(variant.shifted_pnl >= 0.70 * b.net_pnl, false))
+                         bool_or(coalesce(variant.shifted_pnl >= 0.60 * b.net_pnl, false))
                            FILTER (WHERE variant.entry_minutes > b.entry_minutes) AS after_all_pass
                     FROM base b
                     LEFT JOIN time_pnl variant ON variant.parameter_key = b.parameter_key
+                                          AND abs(variant.entry_minutes - b.entry_minutes) IN (2,4,6,8,10,12,14,16,18,20)
                                           AND variant.entry_minutes <> b.entry_minutes
                                           AND variant.entry_minutes BETWEEN b.entry_minutes - {robustness_window_minutes}
                                                                        AND b.entry_minutes + {robustness_window_minutes}

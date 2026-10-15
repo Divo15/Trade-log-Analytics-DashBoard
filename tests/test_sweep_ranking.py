@@ -238,7 +238,7 @@ class SweepRankingTests(unittest.TestCase):
                 ],
             )
 
-    def test_nearby_times_use_complete_available_side_and_reject_failed_variant(self):
+    def test_nearby_times_pass_with_any_qualifying_variant(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory, "sweep.parquet")
             connection = duckdb.connect()
@@ -287,15 +287,15 @@ class SweepRankingTests(unittest.TestCase):
                 for row in result["rows"]
             }
             self.assertEqual(len(rows), 6)
-            self.assertEqual(rows[(100, "09:40:00")]["entry_robustness"], "before")
+            self.assertEqual(rows[(100, "09:40:00")]["entry_robustness"], "both")
             self.assertEqual(rows[(100, "09:40:00")]["before_variant_count"], 1)
             self.assertEqual(rows[(100, "09:40:00")]["after_variant_count"], 2)
             self.assertEqual(rows[(200, "09:40:00")]["entry_robustness"], "after")
-            self.assertEqual(rows[(200, "09:50:00")]["entry_robustness"], "not_confirmed")
+            self.assertEqual(rows[(200, "09:50:00")]["entry_robustness"], "before")
 
             strict = rank_sweep_parquet(path, MAPPING, {}, require_robustness=True)
-            self.assertEqual(strict["eligible_count"], 5)
-            self.assertNotIn(
+            self.assertEqual(strict["eligible_count"], 6)
+            self.assertIn(
                 (200, "09:50:00"),
                 {(row["parameters"]["premium_price"], row["entry_start"])
                  for row in strict["rows"]},
