@@ -719,12 +719,17 @@ function rankedFixedColumns() {
     {key: "drawdown_2026", label: "2026 DD", className: "numeric", numeric: true, money: true},
     {key: "ranking_drawdown", label: "Drawdown", className: "numeric", numeric: true, money: true},
     {key: "entry_robustness", label: "Robustness", className: ""},
+    {key: "entry_robustness_side", label: "Prior / after side", className: ""},
     {key: "entry_start", label: "Entry", className: ""},
     {key: "cutoff_time", label: "Cutoff", className: ""},
   ];
 }
 
 function rankedFixedValue(row, key) {
+  if (key === "entry_robustness_side") {
+    const labels = {before: "Prior", after: "After", both: "Both", not_confirmed: "Not confirmed"};
+    return labels[row.entry_robustness] || "Not confirmed";
+  }
   return key === "cutoff_time" ? cutoffValue(row) : row[key];
 }
 
@@ -1433,11 +1438,17 @@ async function exportRankedSweep(exportFormat) {
   const buttons = ["exportRankedCsv", "exportRankedParquet", "exportRankedExcel"].map($);
   buttons.forEach(button => button.disabled = true);
   $("filterPreviewStatus").textContent = `Creating ${exportFormat.toUpperCase()} export…`;
+  const exportRows = rankedSweepPayload.time_group?.enabled
+    ? rankedSweepPayload.rows
+    : rankedSweepPayload.rows.map(row => ({
+      ...row,
+      entry_robustness_side: rankedFixedValue(row, "entry_robustness_side"),
+    }));
   try {
     const response = await fetch("/api/sweep-export", {
       method: "POST",
       headers: {"Content-Type": "application/json", "X-Local-Runner": "1"},
-      body: JSON.stringify({format: exportFormat, rows: rankedSweepPayload.rows}),
+      body: JSON.stringify({format: exportFormat, rows: exportRows}),
     });
     if (!response.ok) {
       const payload = await response.json();
