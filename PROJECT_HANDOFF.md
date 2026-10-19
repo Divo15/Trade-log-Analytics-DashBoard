@@ -262,8 +262,8 @@ Snapshot observed on 2026-10-19:
   contains earlier SENSEX research notes and a dashboard-photo note.
 - Previous handoff notes record GitHub commit `2cf583e` as the Research-removal
   push. Confirm the current GitHub branch head before claiming that code changes
-  are published. The Markdown handoff is being published separately; that does
-  not publish the dirty application-code changes.
+  are published. Publishing this Markdown file does not publish the dirty
+  application-code changes.
 - Do not run `git reset --hard`, `git clean`, broad checkout, or blind pulls in
   this worktree. Preserve the user's modified files and inspect changes first.
 - Do not stage the generated PDF, datasets, runtime folders, caches, or unrelated
