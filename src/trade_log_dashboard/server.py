@@ -13,12 +13,11 @@ import re
 from uuid import uuid4
 from pathlib import Path
 import tempfile
-import threading
 from typing import Any
 import webbrowser
 from email.parser import BytesParser
 from email.policy import default
-from urllib.parse import urlsplit, unquote
+from urllib.parse import urlsplit
 import zipfile
 
 import duckdb
@@ -28,7 +27,6 @@ from trade_log_exporter import TradeLogError
 from .analytics import analyze_trade_log
 from .equity import analyze_equity
 from .runner import LocalRunner
-from .research import ResearchManager, connection_status
 from .datasets import catalog
 from .storage import StorageLayout, close_logging, configure_logging, load_storage
 from .sweep_schema import (
@@ -78,12 +76,9 @@ class DashboardServer(ThreadingHTTPServer):
             dataset_root=self.storage.dataset_root,
             dataset_cache_path=self.storage.dataset_cache_file,
         )
-        self.activity_lock = threading.RLock()
-        self.research = ResearchManager(self.storage, self.runner)
         super().__init__(server_address, handler_class)
 
     def server_close(self):
-        self.research.close()
         super().server_close()
 
 
@@ -184,9 +179,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802
         request_path = urlsplit(self.path).path
-        if request_path.startswith("/api/research"):
-            self._research_get(request_path)
-            return
         if request_path == "/api/datasets":
             self._json(HTTPStatus.OK, {"datasets": catalog(
                 self.server.storage.dataset_root,
@@ -264,7 +256,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         asset_name = "index.html" if request_path in {"/", "/index.html"} else request_path.lstrip("/")
-        if asset_name not in {"index.html", "app.css", "app.js", "runner.js", "research.js", "research.css"}:
+        if asset_name not in {"index.html", "app.css", "app.js", "runner.js"}:
             self.send_error(HTTPStatus.NOT_FOUND)
             return
         asset = STATIC_ROOT.joinpath(asset_name)
@@ -284,9 +276,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         if self.path == "/api/sweep-save":
             self._save_ranked_combination()
-            return
-        if self.path.startswith("/api/research"):
-            self._research_post()
             return
         if self.path == "/api/settings":
             self._settings()
@@ -629,9 +618,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
         LOGGER.info("%s %s", self.client_address[0], format % args)
 
     def _settings(self):
-        if self.server.research.has_running_job():
-            self._json(HTTPStatus.CONFLICT, {"error": "Stop research before changing dataset storage."})
-            return
         if not self._local_request():
             return
         if self.headers.get("X-Local-Runner") != "1":
@@ -665,11 +651,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         return True
 
     def _backtest(self):
-        with self.server.activity_lock:
-            if self.server.research.has_running_job():
-                self._json(HTTPStatus.CONFLICT, {"error": "Finish or stop research before starting a backtest."})
-                return
-            self._backtest_request()
+        self._backtest_request()
 
     def _backtest_request(self):
         if not self._local_request():
@@ -727,73 +709,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.NOT_FOUND, {"error": "Run or endpoint not found."})
         except (ValueError, OSError, zipfile.BadZipFile) as exc:
             self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-
-    def _research_get(self, request_path):
-        if not self._local_request():
-            return
-        parts = request_path.strip("/").split("/")
-        try:
-            if parts == ["api", "research", "connection"]:
-                self._json(HTTPStatus.OK, connection_status())
-            elif parts == ["api", "research", "runs"]:
-                self._json(HTTPStatus.OK, {"runs": self.server.research.list_runs()})
-            elif len(parts) == 4 and parts[2] == "runs":
-                self._json(HTTPStatus.OK, self.server.research.status(parts[3]))
-            elif len(parts) >= 8 and parts[2] == "runs" and parts[4] == "tasks" and parts[6] == "files":
-                path = self.server.research.artifact(parts[3], parts[5], unquote("/".join(parts[7:])))
-                body = path.read_bytes()
-                self.send_response(HTTPStatus.OK)
-                self.send_header("Content-Type", "application/octet-stream")
-                self.send_header("Content-Disposition", 'attachment; filename="research-artifact.txt"')
-                self.send_header("Content-Length", str(len(body)))
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                self.wfile.write(body)
-            else:
-                raise KeyError("Unknown research endpoint")
-        except (KeyError, ValueError, OSError) as exc:
-            self._json(HTTPStatus.NOT_FOUND, {"error": str(exc)})
-
-    def _research_post(self):
-        if not self._local_request():
-            return
-        if self.headers.get("X-Local-Runner") != "1":
-            self._json(HTTPStatus.FORBIDDEN, {"error": "Use the Research section of this local dashboard."})
-            return
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-            if not 0 < length <= 32 * 1024:
-                raise ValueError("Research requests must be nonempty JSON under 32 KiB.")
-            self.connection.settimeout(30)
-            payload = json.loads(self.rfile.read(length))
-            if not isinstance(payload, dict):
-                raise ValueError("Research request must be a JSON object.")
-            parts = self.path.strip("/").split("/")
-            with self.server.activity_lock:
-                if parts == ["api", "research", "runs"]:
-                    identifier = self.server.research.start(payload)
-                    self._json(HTTPStatus.ACCEPTED, {"id": identifier})
-                elif len(parts) == 5 and parts[2] == "runs":
-                    identifier, action = parts[3:]
-                    if action == "stop":
-                        self.server.research.stop(identifier)
-                    elif action == "resume":
-                        self.server.research.resume(identifier)
-                    elif action == "message":
-                        self.server.research.message(identifier, payload.get("text"))
-                    elif action == "handoff":
-                        self._json(HTTPStatus.OK, self.server.research.handoff(identifier))
-                        return
-                    else:
-                        raise KeyError("Unknown research action")
-                    self._json(HTTPStatus.OK, {"id": identifier})
-                else:
-                    raise KeyError("Unknown research endpoint")
-        except KeyError as exc:
-            self._json(HTTPStatus.NOT_FOUND, {"error": str(exc)})
-        except (ValueError, TypeError, OSError) as exc:
-            self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the local trade-log analytics dashboard")

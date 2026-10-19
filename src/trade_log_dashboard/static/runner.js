@@ -136,7 +136,6 @@ $("storageForm").addEventListener("submit", async event => {
 });
 
 function showRunner() {
-  window.hideResearch?.();
   $("runnerPanel").hidden = false;
   $("parquetPanel").hidden = true;
   $("uploadView").hidden = true;
@@ -1842,7 +1841,6 @@ async function openSweepIteration(index, button) {
 }
 
 function renderSweep(sweep, id, {partial = false} = {}) {
-  window.hideResearch?.();
   sweepRun = id;
   $("sweepSaveStatus").textContent = "";
   selectedSweepIndex = null;
